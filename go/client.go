@@ -118,10 +118,14 @@ func (c *AICQClient) ImportAgent(
                 return nil, fmt.Errorf("import keys: %w", err)
         }
         // Inject account info + tokens
+        //
+        // CRITICAL: SetAccountInfo must be called so that AuthManager.AccountID()
+        // returns the correct value. WSManager.Connect() uses AccountID() as the
+        // nodeId for the "online" WS message; if it's empty, the AICQ server
+        // cannot match the connection to an account and the agent will appear
+        // offline on the AICQ client (aicq.me/chat).
+        c.auth.SetAccountInfo(agentID, agentName)
         c.auth.SetTokens(accessToken, refreshToken)
-        // We can't directly set AccountID/AccountName through auth manager's
-        // public API, so we rely on the next Refresh/ChallengeLogin to populate
-        // them. To make that work, we DO need to set them via DB save.
         agent := &Agent{
                 ID:           agentID,
                 Name:         agentName,
@@ -142,6 +146,10 @@ func (c *AICQClient) ListAgents() []*Agent {
 
 // SetCurrentAgent sets the current active agent. Returns false if not found.
 func (c *AICQClient) SetCurrentAgent(agentID string) bool {
+        agent := c.db.LoadAgent(agentID)
+        if agent == nil {
+                return false
+        }
         if !c.db.SetCurrentAgent(agentID) {
                 return false
         }
@@ -150,6 +158,11 @@ func (c *AICQClient) SetCurrentAgent(agentID string) bool {
         if ok {
                 c.auth.SetTokens(accessToken, refreshToken)
         }
+        // Restore account info (ID + name) so that WSManager.Connect() can
+        // send the correct nodeId in the "online" WS message. Without this,
+        // switching agents would leave AuthManager.accountID stale and the
+        // agent would appear offline on the AICQ client.
+        c.auth.SetAccountInfo(agent.ID, agent.Name)
         return true
 }
 

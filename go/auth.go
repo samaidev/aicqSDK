@@ -125,6 +125,29 @@ func (a *AuthManager) SetTokens(access, refresh string) {
         }
 }
 
+// SetAccountInfo sets the account ID and account name.
+//
+// This is used by ImportAgent to populate the account identity that was
+// previously only persisted to the local DB. Without this, the WSManager
+// would send an "online" message with an EMPTY nodeId because
+// AuthManager.AccountID() returned "" — the AICQ server cannot match an
+// empty nodeId to an account, so the agent appears offline on the AICQ
+// client (aicq.me/chat).
+//
+// Both fields are optional (can be "") to allow partial updates, but in
+// practice ImportAgent always sets both. Existing values are only
+// overwritten if the new value is non-empty.
+func (a *AuthManager) SetAccountInfo(accountID, accountName string) {
+        a.mu.Lock()
+        defer a.mu.Unlock()
+        if accountID != "" {
+                a.accountID = accountID
+        }
+        if accountName != "" {
+                a.accountName = accountName
+        }
+}
+
 // ─── Registration & Login ───
 
 // Register registers a new AI agent with the server.
