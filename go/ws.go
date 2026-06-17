@@ -38,6 +38,7 @@ type WSManager struct {
         onFriendRequest FriendRequestCallback
         onPresence      PresenceCallback
         onRaw           RawCallback
+        onReconnect     func() // fired after a successful reconnect (set via SetOnReconnect)
 
         // Dedup
         dedup *DedupTracker
@@ -108,6 +109,18 @@ func (w *WSManager) OnRaw(cb RawCallback) {
         w.onRaw = cb
 }
 
+// SetOnReconnect registers a callback that fires after a successful
+// reconnect (i.e. after the WS connection is re-established and the
+// "online" message has been sent).
+//
+// This is used by integrators (e.g. zagent) to fetch missed messages
+// after a transient WS disconnect. The callback fires both for
+// auto-reconnects (triggered by readLoop when the connection drops) and
+// for explicit ReconnectLoop calls.
+func (w *WSManager) SetOnReconnect(cb func()) {
+        w.onReconnect = cb
+}
+
 // ─── Connection Management ───
 
 // wsURL converts the HTTP server URL to a WebSocket URL.
@@ -174,6 +187,88 @@ func (w *WSManager) Connect() error {
         return nil
 }
 
+// ConnectWithRetry blocks until the WS connection is established, retrying
+// with exponential backoff until success or until stopCh is closed.
+//
+// This mirrors the behavior of zagent's legacy ConnectWS infinite loop:
+// the first Connect() may fail (server unreachable, transient network
+// issue, expired token), and we want to keep trying rather than give up
+// immediately.
+//
+// On a successful initial connect, this returns nil. The auto-reconnect
+// logic in readLoop handles subsequent disconnects.
+//
+// If a callback is provided via SetOnReconnect, it will fire after the
+// first successful connection too — this allows integrators to fetch
+// unread messages on startup, not just on reconnects.
+func (w *WSManager) ConnectWithRetry() error {
+        // If already connected, nothing to do.
+        if w.IsConnected() {
+                return nil
+        }
+
+        w.reconnectMu.Lock()
+        w.reconnecting = true
+        w.reconnectMu.Unlock()
+
+        defer func() {
+                w.reconnectMu.Lock()
+                w.reconnecting = false
+                w.reconnectMu.Unlock()
+        }()
+
+        // First attempt: try Connect() directly. If the token is empty,
+        // the caller (AICQClient.Connect) is responsible for calling
+        // EnsureAuth first.
+        isFirst := true
+        for {
+                if !isFirst {
+                        // Wait with exponential backoff before retrying.
+                        w.reconnectMu.Lock()
+                        waitSecs := w.backoffSecs
+                        w.reconnectMu.Unlock()
+
+                        log.Printf("[WS] Initial connect retry in %ds ...", waitSecs)
+
+                        select {
+                        case <-time.After(time.Duration(waitSecs) * time.Second):
+                        case <-w.stopCh:
+                                return NewConnectionError("connect cancelled", false)
+                        }
+                }
+                isFirst = false
+
+                // Refresh token before each attempt (no-op if token is still valid).
+                if err := w.auth.Refresh(); err != nil {
+                        log.Printf("[WS] Token refresh failed before connect: %v", err)
+                }
+
+                if err := w.Connect(); err != nil {
+                        log.Printf("[WS] Connect failed: %v", err)
+
+                        // Increase backoff
+                        w.reconnectMu.Lock()
+                        if w.backoffSecs == 0 {
+                                w.backoffSecs = initialBackoff
+                        }
+                        w.backoffSecs *= 2
+                        if w.backoffSecs > maxBackoffSecs {
+                                w.backoffSecs = maxBackoffSecs
+                        }
+                        w.reconnectMu.Unlock()
+                        continue
+                }
+
+                // Successful connection.
+                // Fire the onReconnect callback on initial connect too, so
+                // integrators can fetch unread messages on startup.
+                if w.onReconnect != nil {
+                        go w.onReconnect()
+                }
+                return nil
+        }
+}
+
 // Disconnect gracefully closes the WebSocket connection.
 // FIXED: Sends {"type":"offline","nodeId":"..."} before closing.
 func (w *WSManager) Disconnect() {
@@ -223,6 +318,11 @@ func (w *WSManager) Disconnect() {
 // ReconnectLoop attempts to reconnect with exponential backoff.
 // This should be called in a goroutine. It will keep trying until
 // the stopCh is closed or a successful connection is made.
+//
+// The onReconnect argument is kept for backward compatibility but is
+// ignored — the WSManager's registered onReconnect callback (set via
+// SetOnReconnect) is always used. This ensures auto-reconnects from
+// readLoop fire the same callback as explicit reconnect calls.
 func (w *WSManager) ReconnectLoop(onReconnect func()) {
         w.reconnectMu.Lock()
         w.reconnecting = true
@@ -269,8 +369,10 @@ func (w *WSManager) ReconnectLoop(onReconnect func()) {
                 // Successful reconnection
                 log.Printf("[WS] Reconnected successfully")
 
-                if onReconnect != nil {
-                        go onReconnect()
+                // Use the WSManager's registered onReconnect callback
+                // (the onReconnect argument is ignored for backward compat).
+                if w.onReconnect != nil {
+                        go w.onReconnect()
                 }
                 return
         }
