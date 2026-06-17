@@ -1,0 +1,39 @@
+{
+  "name": "aicq-sdk",
+  "version": "1.0.0",
+  "description": "AICQ Unified SDK for Node.js — E2EE-ready messaging, WebSocket-first communication, and Ed25519 authentication",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf lib",
+    "prepublishOnly": "npm run build",
+    "lint": "tsc --noEmit"
+  },
+  "keywords": [
+    "aicq",
+    "messaging",
+    "e2ee",
+    "websocket",
+    "ed25519",
+    "sdk"
+  ],
+  "author": "AICQ",
+  "license": "MIT",
+  "dependencies": {
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
