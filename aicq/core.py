@@ -17,6 +17,7 @@ import os
 import time
 import logging
 import uuid
+from collections import OrderedDict
 from typing import Optional, Callable, Dict, Any, List
 
 import aiohttp
@@ -25,6 +26,15 @@ from . import crypto
 from .db import Database
 
 logger = logging.getLogger("aicq")
+
+# ─── SPEC 合规常量 ────────────────────────────────────────────────
+# 见 aicqSDK/SPEC.md:
+#   - WebSocket 重连指数退避: 1s, 2s, 4s, 8s, ..., 最大 60s
+#   - 消息去重: 保留最近 500 条已处理 ID, 超过 1000 时裁剪到 500
+_INITIAL_BACKOFF_MS = 1000
+_MAX_BACKOFF_MS = 60_000
+_DEDUP_SOFT_LIMIT = 1000
+_DEDUP_HARD_LIMIT = 500
 
 # ─── 临时房间密钥持久化 ─────────────────────────────────────────────
 
@@ -129,6 +139,48 @@ class AICQCore:
         self._ephemeral: Optional[Dict[str, Any]] = None
         # 流式输出取消标记: friend_id → bool
         self._stream_cancelled: Dict[str, bool] = {}
+        # ── SPEC 合规: WS 自动重连 (exponential backoff) ──
+        self._auto_reconnect: bool = True
+        self._reconnect_backoff_ms: int = _INITIAL_BACKOFF_MS
+        self._reconnect_task: Optional[asyncio.Task] = None
+        self._manual_disconnect: bool = False  # True 表示用户主动 disconnect, 不要重连
+        # ── SPEC 合规: 消息去重 (ordered, 保留最近 500 条) ──
+        self._seen_msg_ids: "OrderedDict[str, None]" = OrderedDict()
+
+    # ─── 消息去重 ──────────────────────────────────────────────
+
+    def _is_duplicate(self, data: Dict[str, Any]) -> bool:
+        """检查消息是否已处理过。
+
+        根据 SPEC.md:
+          - 维护已处理消息 ID 集合
+          - 大小超过 1000 时裁剪到最近 500 条
+          - 重连后跳过已见 ID
+
+        Returns:
+            True 如果是重复消息 (应跳过), False 如果是新消息
+        """
+        msg_id = (
+            data.get("id")
+            or data.get("messageId")
+            or data.get("msg_id")
+            or (data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None)
+        )
+        if not msg_id:
+            # 没有 ID 的消息 (如 presence/error) 不去重
+            return False
+
+        msg_id = str(msg_id)
+        if msg_id in self._seen_msg_ids:
+            logger.debug("跳过重复消息 id=%s", msg_id)
+            return True
+
+        self._seen_msg_ids[msg_id] = None
+        if len(self._seen_msg_ids) > _DEDUP_SOFT_LIMIT:
+            # 裁剪: 保留最近的 _DEDUP_HARD_LIMIT 条
+            while len(self._seen_msg_ids) > _DEDUP_HARD_LIMIT:
+                self._seen_msg_ids.popitem(last=False)
+        return False
 
     # ─── HTTP 辅助 ──────────────────────────────────────────────
 
@@ -463,6 +515,8 @@ class AICQCore:
         """连接 WebSocket 并认证。
 
         连接成功后启动消息接收循环。
+        断线时会按 SPEC.md 自动重连 (1s/2s/4s/.../60s 指数退避),
+        除非用户主动调用 disconnect()。
         """
         if not self.access_token:
             raise AICQConnectionError("未登录，请先调用 login()")
@@ -471,26 +525,11 @@ class AICQCore:
         if agent is None:
             raise AICQConnectionError("没有可用的智能体")
 
-        session = await self._get_session()
-        ws_url = self.server.replace("https://", "wss://").replace("http://", "ws://")
-        ws_url = f"{ws_url}/ws"
+        # 用户主动 connect → 重置 manual_disconnect 标记
+        self._manual_disconnect = False
+        self._reconnect_backoff_ms = _INITIAL_BACKOFF_MS
 
-        try:
-            self.ws = await session.ws_connect(ws_url)
-        except Exception as e:
-            raise AICQConnectionError(f"WebSocket 连接失败: {e}")
-
-        # 发送上线消息
-        online_msg = {
-            "type": "online",
-            "nodeId": agent["account_id"],
-            "token": self.access_token,
-        }
-        await self.ws.send_json(online_msg)
-
-        self._running = True
-        self._ws_task = asyncio.create_task(self._ws_loop())
-        logger.info("WebSocket 已连接并认证，agent=%s", agent["account_id"])
+        await self._do_ws_connect(is_ephemeral=False)
 
     async def connect_ephemeral(self, ephemeral_id: str, room_id: str, token: str):
         """以临时身份连接 WebSocket。
@@ -500,6 +539,20 @@ class AICQCore:
             room_id: 临时房间 ID
             token: 临时访问 JWT 令牌
         """
+        # 用户主动 connect → 重置 manual_disconnect 标记
+        self._manual_disconnect = False
+        self._reconnect_backoff_ms = _INITIAL_BACKOFF_MS
+        await self._do_ws_connect(is_ephemeral=True, ephemeral_id=ephemeral_id,
+                                   room_id=room_id, token=token)
+
+    async def _do_ws_connect(
+        self,
+        is_ephemeral: bool = False,
+        ephemeral_id: str = "",
+        room_id: str = "",
+        token: str = "",
+    ):
+        """实际建立 WS 连接并发送 online/ephemeral_online 消息。"""
         session = await self._get_session()
         ws_url = self.server.replace("https://", "wss://").replace("http://", "ws://")
         ws_url = f"{ws_url}/ws"
@@ -509,18 +562,31 @@ class AICQCore:
         except Exception as e:
             raise AICQConnectionError(f"WebSocket 连接失败: {e}")
 
-        # 发送临时上线消息（服务器要求 ephemeralId + roomId + token）
-        ephemeral_msg = {
-            "type": "ephemeral_online",
-            "ephemeralId": ephemeral_id,
-            "roomId": room_id,
-            "token": token,
-        }
-        await self.ws.send_json(ephemeral_msg)
+        if is_ephemeral:
+            ephemeral_msg = {
+                "type": "ephemeral_online",
+                "ephemeralId": ephemeral_id,
+                "roomId": room_id,
+                "token": token,
+            }
+            await self.ws.send_json(ephemeral_msg)
+            logger.info("临时房间 WebSocket 已连接，ephemeral=%s room=%s", ephemeral_id, room_id)
+        else:
+            agent = self._agent or self.db.get_agent()
+            if agent is None:
+                raise AICQConnectionError("没有可用的智能体")
+            online_msg = {
+                "type": "online",
+                "nodeId": agent["account_id"],
+                "token": self.access_token,
+            }
+            await self.ws.send_json(online_msg)
+            logger.info("WebSocket 已连接并认证，agent=%s", agent["account_id"])
 
         self._running = True
+        # 重置退避 (连接成功)
+        self._reconnect_backoff_ms = _INITIAL_BACKOFF_MS
         self._ws_task = asyncio.create_task(self._ws_loop())
-        logger.info("临时房间 WebSocket 已连接，ephemeral=%s room=%s", ephemeral_id, room_id)
 
     async def _ws_loop(self):
         """WebSocket 消息接收循环。"""
@@ -532,6 +598,9 @@ class AICQCore:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
+                        # SPEC 合规: 消息去重
+                        if self._is_duplicate(data):
+                            continue
                         await self._handle_ws_message(data)
                     except json.JSONDecodeError:
                         logger.warning("收到非 JSON 消息: %s", msg.data[:100])
@@ -547,6 +616,9 @@ class AICQCore:
         finally:
             self._running = False
             logger.info("WebSocket 循环已退出")
+            # SPEC 合规: 自动重连 (非用户主动断开时)
+            if self._auto_reconnect and not self._manual_disconnect:
+                self._schedule_reconnect(is_ephemeral=self._ephemeral is not None)
 
     def _dispatch_callback(self, name: str, data: Dict[str, Any]):
         """分发回调为独立任务，避免阻塞 WS 接收循环。
@@ -710,6 +782,16 @@ class AICQCore:
         更新在线状态并触发离线消息队列（SPEC 规范）。
         同时清理所有待处理的 WS 请求 future 和回调任务。
         """
+        self._manual_disconnect = True  # 阻止 _ws_loop 触发重连
+        # 取消可能挂起的重连任务
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except asyncio.CancelledError:
+                pass
+            self._reconnect_task = None
+
         self._running = False
 
         # 1. 发送优雅离线消息（best-effort，失败也继续关闭）
@@ -745,6 +827,57 @@ class AICQCore:
         self._stream_cancelled.clear()
 
         logger.info("已断开连接")
+
+    def _schedule_reconnect(self, is_ephemeral: bool = False):
+        """按指数退避调度重连任务 (SPEC 合规: 1s/2s/4s/.../60s)。"""
+        if self._reconnect_task and not self._reconnect_task.done():
+            return  # 已有重连任务在等待
+
+        delay_ms = self._reconnect_backoff_ms
+        # 指数退避: 1s → 2s → 4s → 8s → ... → max 60s
+        self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, _MAX_BACKOFF_MS)
+
+        logger.warning(
+            "WebSocket 断开 — 将在 %.1fs 后尝试重连 (backoff=%dms)",
+            delay_ms / 1000.0, delay_ms,
+        )
+        self._reconnect_task = asyncio.create_task(
+            self._reconnect_after(delay_ms / 1000.0, is_ephemeral)
+        )
+
+    async def _reconnect_after(self, delay: float, is_ephemeral: bool):
+        """延迟后尝试重连。失败则继续退避。"""
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+
+        if self._manual_disconnect or not self._auto_reconnect:
+            return
+
+        # 重连前刷新 token (如果过期)
+        if not is_ephemeral and self.refresh_token:
+            try:
+                await self.refresh_auth()
+                logger.info("重连前刷新 token 成功")
+            except Exception as e:
+                logger.warning("重连前刷新 token 失败: %s — 尝试用现有 token 重连", e)
+
+        try:
+            if is_ephemeral and self._ephemeral:
+                await self._do_ws_connect(
+                    is_ephemeral=True,
+                    ephemeral_id=self._ephemeral.get("ephemeral_id", ""),
+                    room_id=self._ephemeral.get("room_id", ""),
+                    token=self._ephemeral.get("token", ""),
+                )
+            else:
+                await self._do_ws_connect(is_ephemeral=False)
+            logger.info("重连成功")
+        except Exception as e:
+            logger.error("重连失败: %s — 继续退避", e)
+            self._schedule_reconnect(is_ephemeral=is_ephemeral)
+
 
     # ─── 好友管理 ───────────────────────────────────────────────
 
