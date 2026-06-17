@@ -311,6 +311,12 @@ func (c *AICQClient) SendGroupMessageWithMedia(groupID string, msgType string, c
 //
 // 这是 zagent ws.go:445 的 file_info PM 的 SDK 等价方法。
 // 通常调用顺序: SendFileInfo → 多次 SendFileChunk → 直到所有分块发完。
+//
+// NOTE: This uses a DIFFERENT message format from zagent's legacy
+// implementation. zagent's legacy format wraps file_info in a "data"
+// object with a "file_info" sub-key and includes a content placeholder.
+// If you need the legacy format for backward compatibility with existing
+// AICQ JS clients, use SendRawWS with the legacy message map instead.
 func (c *AICQClient) SendFileInfo(friendID string, sessionID string, fileName string,
         fileSize int64, mimeType string, totalChunks int) error {
 
@@ -326,6 +332,18 @@ func (c *AICQClient) SendFileInfo(friendID string, sessionID string, fileName st
                         "total_chunks": totalChunks,
                 },
         }
+        return c.ws.sendWSJSON(msg)
+}
+
+// ─── SendRawWS (任意 WS 消息发送) ──────────────────────────────────
+
+// SendRawWS 通过当前 WS 连接发送任意 JSON 消息。
+// 这是为了让集成方 (zagent) 能发送 SDK 没有专门封装的 WS 消息格式
+// (例如 zagent legacy 的 file_info PM 格式, 或未来新增的 WS 事件类型)。
+//
+// 注意: 调用方需自己保证消息格式与 AICQ 服务端/客户端兼容。
+// 如果 WS 未连接, 返回 ConnectionError。
+func (c *AICQClient) SendRawWS(msg interface{}) error {
         return c.ws.sendWSJSON(msg)
 }
 
