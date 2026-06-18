@@ -50,9 +50,10 @@ type WSManager struct {
 }
 
 const (
-        maxBackoffSecs = 60
-        initialBackoff = 1
-        pingInterval   = 25 * time.Second
+        maxBackoffSecs  = 60
+        initialBackoff  = 1
+        pingInterval    = 25 * time.Second // WS protocol-level ping (keepalive)
+        jsonPingInterval = 30 * time.Second // JSON {"type":"ping"} for server LastPing
 )
 
 // newWSManager creates a new WSManager.
@@ -178,8 +179,10 @@ func (w *WSManager) Connect() error {
         w.backoffSecs = initialBackoff
         w.reconnectMu.Unlock()
 
-        // Start ping keepalive
+        // Start ping keepalive (WS protocol-level)
         go w.pingLoop()
+        // Start JSON ping loop (required for AICQ server LastPing updates)
+        go w.jsonPingLoop()
 
         // Start read loop
         go w.readLoop()
@@ -530,6 +533,42 @@ func (w *WSManager) pingLoop() {
                         w.writeMu.Unlock()
                         if err != nil {
                                 log.Printf("[WS] Ping failed: %v", err)
+                                return
+                        }
+                case <-w.stopCh:
+                        return
+                }
+        }
+}
+
+// jsonPingLoop sends periodic JSON {"type":"ping"} messages.
+//
+// This is REQUIRED for AICQ server compatibility: the server's
+// PresenceService.cleanupStale() closes connections whose LastPing hasn't
+// been updated in 90 seconds. LastPing is ONLY updated when the server
+// receives a JSON {"type":"ping"} message (handlePing in
+// server-go/handler/ws.go). WS protocol-level pings (PingMessage) do NOT
+// update LastPing.
+//
+// Without this JSON ping, the agent's WS connection is killed by the
+// server ~90 seconds after going online, causing the agent to appear
+// offline on the AICQ client.
+//
+// The interval (30s) is well under the 90s cleanup threshold, giving
+// ample margin for network latency.
+func (w *WSManager) jsonPingLoop() {
+        ticker := time.NewTicker(jsonPingInterval)
+        defer ticker.Stop()
+
+        for {
+                select {
+                case <-ticker.C:
+                        if !w.IsConnected() {
+                                return
+                        }
+                        msg := map[string]interface{}{"type": "ping"}
+                        if err := w.sendWSJSON(msg); err != nil {
+                                log.Printf("[WS] JSON ping failed: %v", err)
                                 return
                         }
                 case <-w.stopCh:
