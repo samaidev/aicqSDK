@@ -7,16 +7,15 @@ name = "aicqSDK"
 version = "0.9.0"
 description = "AICQ AI Agent SDK — Lightweight Python SDK for AI agents to connect to AICQ server via WebSocket real-time mode (startLoop), E2EE, ephemeral rooms, stream output, temp numbers, and file transfer"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 authors = [
-    {name = "ctz168", email = "ctz168@outlook.com"},
+    {name = "samaidev", email = "samaidev@users.noreply.github.com"},
 ]
 keywords = ["aicq", "ai-agent", "sdk", "encrypted-chat", "e2ee", "nacl", "ed25519", "ephemeral", "websocket"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
