@@ -80,8 +80,10 @@ def _save_ephemeral_key(invite_code: str, private_key: str, room_id: str = "",
     os.makedirs(EPHEMERAL_DIR, exist_ok=True)
     path = _ephemeral_key_path(invite_code)
     try:
+        # 注意：邀请码大小写敏感（服务器用 SQLite WHERE invite_code = ? 直接匹配），
+        # 因此保存原始大小写，不做 .upper()，否则下次 join 时拿到的密钥会和原邀请码错配。
         data = {
-            "invite_code": invite_code.strip().upper(),
+            "invite_code": invite_code.strip(),
             "private_key": private_key,
             "room_id": room_id,
             "display_name": display_name,
@@ -1327,8 +1329,8 @@ class AICQCore:
         # ─── 自动复用密钥（内存 → 文件） ───
         resolved_key = private_key
         if not resolved_key and self._ephemeral:
-            # 内存缓存中有，且邀请码匹配
-            if self._ephemeral.get("invite_code", "").upper() == invite_code.strip().upper():
+            # 内存缓存中有，且邀请码匹配（邀请码大小写敏感，不做大写化）
+            if self._ephemeral.get("invite_code", "") == invite_code.strip():
                 resolved_key = self._ephemeral.get("raw_token", "")
         if not resolved_key:
             # 从本地文件加载
@@ -1854,7 +1856,24 @@ class AICQAgentClient:
         invite_code:  最近一次加入的邀请码
     """
 
-    def __init__(self, server: str = "https://aicq.me"):
+    def __init__(
+        self,
+        server: str = "https://aicq.me",
+        access_token: Optional[str] = None,
+        auto_login: bool = True,
+    ):
+        """初始化 Agent 客户端。
+
+        Args:
+            server: AICQ 服务器地址
+            access_token: 已有的 access_token（JWT）。若不传且 auto_login=True，
+                SDK 会自动复用本地已注册的 agent 身份（或注册一个新的），
+                调用 login() 拿到 access_token。服务器要求所有 /ephemeral/*
+                路由都携带 ``Authorization: Bearer <token>`` 头。
+            auto_login: 是否在 join()/chat() 之前自动获取 access_token。
+                设为 False 则必须显式传 access_token，否则会在 join() 时
+                抛出 AICQError。
+        """
         self.base_url = server.rstrip("/")
         self.private_key: Optional[str] = None
         self.ephemeral_id: Optional[str] = None
@@ -1862,9 +1881,98 @@ class AICQAgentClient:
         self.room_name: Optional[str] = None
         self.members: List[Dict[str, Any]] = []
         self.latest_timestamp: Optional[str] = None
+        self.access_token: Optional[str] = access_token
+        self._auto_login: bool = auto_login
+        # 内部 AICQCore 实例，仅在自动登录时创建
+        self._core: Optional["AICQCore"] = None
+        # 复用 aiohttp session，避免每次请求都重新建立连接池
+        self._session: Optional[aiohttp.ClientSession] = None
         self.expires_at: Optional[str] = None
         self.usage: Optional[Dict[str, Any]] = None
         self.invite_code: Optional[str] = None
+
+    # ─── 内部辅助：身份与 HTTP 会话 ────────────────────────────
+
+    async def _ensure_token(self) -> None:
+        """确保有可用的 access_token。
+
+        服务器要求所有 /ephemeral/* 路由都携带 Authorization: Bearer <token>。
+        若调用方未显式传 access_token，且 auto_login=True，则自动复用本地
+        已注册的 agent 身份（或注册一个新的）并 login()。
+        """
+        if self.access_token:
+            return
+        if not self._auto_login:
+            raise AICQError(
+                "未提供 access_token 且 auto_login=False。"
+                "请通过 AICQCore 登录后传 access_token，或设 auto_login=True。"
+            )
+        # 用 AICQCore 复用本地 agent 身份并登录
+        self._core = AICQCore(server=self.base_url)
+        agent = self._core.db.get_agent()
+        if agent is None:
+            logger.info("本地无 agent，自动注册一个新的 agent 用于 Agent API")
+            agent = await self._core.create_my_agent("AICQAgentClient")
+        else:
+            self._core._agent = agent
+            await self._core.login()
+        self.access_token = self._core.access_token
+        if not self.access_token:
+            raise AICQError("自动登录失败，未拿到 access_token")
+
+    def _ensure_token_sync(self) -> None:
+        """_ensure_token 的同步版本，内部用 asyncio.run 跑异步实现。"""
+        if self.access_token:
+            return
+        if not self._auto_login:
+            raise AICQError(
+                "未提供 access_token 且 auto_login=False。"
+                "请通过 AICQCore 登录后传 access_token，或设 auto_login=True。"
+            )
+        # 简化同步路径：直接 asyncio.run 跑异步版本
+        import asyncio as _asyncio
+        try:
+            _asyncio.get_event_loop()
+        except RuntimeError:
+            pass
+        _asyncio.run(self._ensure_token())
+
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """复用 aiohttp ClientSession，避免每次请求都重建连接池。"""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    def _auth_headers(self) -> Dict[str, str]:
+        if not self.access_token:
+            raise AICQError(
+                "未登录。请在调用前执行 await client._ensure_token()，"
+                "或在 __init__ 时传 access_token / auto_login=True。"
+            )
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    @staticmethod
+    def _parse_error(data: Any) -> str:
+        """统一解析服务器错误结构 {error: {code, message}} 为可读字符串。"""
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                code = err.get("code", "?")
+                msg = err.get("message", "")
+                return f"[{code}] {msg}" if code and msg else str(err)
+            if err:
+                return str(err)
+            return data.get("message") or str(data)
+        return str(data)
+
+    async def close(self) -> None:
+        """释放内部资源（aiohttp session、AICQCore）。建议在脚本结束时调用。"""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
+        if self._core is not None:
+            await self._core.close()
+            self._core = None
 
     # ─── 异步方法 (aiohttp) ───────────────────────────────────────
 
@@ -1883,7 +1991,7 @@ class AICQAgentClient:
         5. 加入成功后，自动将 private_key 保存到本地文件
 
         Args:
-            invite_code: 房间邀请码（如 RKT22Y）
+            invite_code: 房间邀请码。**大小写敏感**，会原样发给服务器。
             display_name: 在房间中的显示昵称
             private_key: 之前加入时获得的私钥（可选，用于身份复用）
 
@@ -1894,11 +2002,16 @@ class AICQAgentClient:
         Raises:
             AICQError: 加入失败
         """
-        code_upper = invite_code.strip().upper()
+        # 注意：邀请码大小写敏感（服务器用 SQLite WHERE invite_code = ? 直接匹配），
+        # 历史版本会 .upper() 导致 'c5f9012b' 这类十六进制邀请码 404。
+        code = invite_code.strip()
+
+        # 确保有 access_token
+        await self._ensure_token()
 
         # ─── 自动复用密钥（内存 → 文件） ───
         resolved_key = private_key.strip() if private_key else ""
-        if not resolved_key and self.invite_code and self.invite_code.upper() == code_upper:
+        if not resolved_key and self.invite_code and self.invite_code == code:
             # 内存缓存中有，且邀请码匹配
             resolved_key = self.private_key or ""
         if not resolved_key:
@@ -1906,39 +2019,45 @@ class AICQAgentClient:
             file_key = _load_ephemeral_key(invite_code)
             if file_key:
                 resolved_key = file_key
-                logger.info("自动复用文件中的临时房间密钥: invite_code=%s", code_upper)
+                logger.info("自动复用文件中的临时房间密钥: invite_code=%s", code)
 
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url}/api/v1/ephemeral/agent/join"
-            payload = {
-                "invite_code": code_upper,
-                "display_name": display_name.strip(),
-            }
-            if resolved_key:
-                payload["private_key"] = resolved_key
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                data = await resp.json()
-                if resp.status != 200:
-                    raise AICQError(f"加入失败: {data.get('error', 'Unknown error')}")
+        session = await self._get_session()
+        url = f"{self.base_url}/api/v1/ephemeral/agent/join"
+        payload: Dict[str, Any] = {
+            "invite_code": code,
+            "display_name": display_name.strip(),
+        }
+        if resolved_key:
+            payload["private_key"] = resolved_key
+
+        async with session.post(
+            url, json=payload,
+            headers=self._auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                raise AICQError(f"加入失败: {self._parse_error(data)}")
 
         # 保存状态
         self.private_key = data["private_key"]
         self.ephemeral_id = data["ephemeral_id"]
         self.room_id = data["room_id"]
         self.room_name = data.get("room_name", "")
-        self.members = data.get("members", [])
+        # 服务器在某些路径下可能返回 None，统一兜底为 []
+        self.members = data.get("members") or []
         self.expires_at = data.get("expires_at", "")
         self.usage = data.get("usage")
-        self.invite_code = code_upper
+        self.invite_code = code
 
         # 设置 latest_timestamp 为最后一条消息的时间戳
-        history = data.get("history", [])
+        history = data.get("history") or []
         if history:
             self.latest_timestamp = history[-1].get("timestamp", "")
 
-        # ─── 自动保存密钥到本地文件 ───
+        # ─── 自动保存密钥到本地文件（用原始邀请码，避免大小写错配） ───
         if self.private_key:
-            _save_ephemeral_key(code_upper, self.private_key, self.room_id, display_name.strip())
+            _save_ephemeral_key(code, self.private_key, self.room_id, display_name.strip())
 
         logger.info(
             "Agent joined room: %s (%s) in %s, history=%d msgs, is_rejoin=%s",
@@ -1973,25 +2092,32 @@ class AICQAgentClient:
         """
         if not self.private_key:
             raise AICQError("尚未加入房间，请先调用 join()")
+        # access_token 可能在 join() 后过期；这里做一次轻量校验
+        if not self.access_token:
+            await self._ensure_token()
 
         timeout_val = max(30, wait_seconds + 30)
-        async with aiohttp.ClientSession() as session:
-            url = f"{self.base_url}/api/v1/ephemeral/agent/chat"
-            payload = {
-                "private_key": self.private_key,
-                "speak": speak,
-                "content": content,
-                "wait_seconds": wait_seconds,
-                "since": since or self.latest_timestamp or "",
-            }
-            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout_val)) as resp:
-                data = await resp.json()
-                if resp.status != 200:
-                    raise AICQError(f"Chat 失败: {data.get('error', 'Unknown error')}")
+        session = await self._get_session()
+        url = f"{self.base_url}/api/v1/ephemeral/agent/chat"
+        payload = {
+            "private_key": self.private_key,
+            "speak": speak,
+            "content": content,
+            "wait_seconds": wait_seconds,
+            "since": since or self.latest_timestamp or "",
+        }
+        async with session.post(
+            url, json=payload,
+            headers=self._auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=timeout_val),
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                raise AICQError(f"Chat 失败: {self._parse_error(data)}")
 
-        # 更新状态
-        self.members = data.get("members", self.members)
-        self.latest_timestamp = data.get("latest_timestamp", self.latest_timestamp)
+        # 更新状态（messages 可能为 None，统一兜底）
+        self.members = data.get("members") or self.members
+        self.latest_timestamp = data.get("latest_timestamp") or self.latest_timestamp
 
         return data
 
@@ -2005,46 +2131,51 @@ class AICQAgentClient:
         """
         import requests
 
-        code_upper = invite_code.strip().upper()
+        # 邀请码大小写敏感，保留原始大小写
+        code = invite_code.strip()
+
+        # 确保有 access_token（同步路径）
+        self._ensure_token_sync()
 
         # ─── 自动复用密钥（内存 → 文件） ───
         resolved_key = private_key.strip() if private_key else ""
-        if not resolved_key and self.invite_code and self.invite_code.upper() == code_upper:
+        if not resolved_key and self.invite_code and self.invite_code == code:
             resolved_key = self.private_key or ""
         if not resolved_key:
             file_key = _load_ephemeral_key(invite_code)
             if file_key:
                 resolved_key = file_key
-                logger.info("自动复用文件中的临时房间密钥: invite_code=%s", code_upper)
+                logger.info("自动复用文件中的临时房间密钥: invite_code=%s", code)
 
         url = f"{self.base_url}/api/v1/ephemeral/agent/join"
-        payload = {
-            "invite_code": code_upper,
+        payload: Dict[str, Any] = {
+            "invite_code": code,
             "display_name": display_name.strip(),
         }
         if resolved_key:
             payload["private_key"] = resolved_key
-        resp = requests.post(url, json=payload, timeout=30)
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        resp = requests.post(url, json=payload, headers=headers, timeout=30)
         data = resp.json()
         if resp.status_code != 200:
-            raise AICQError(f"加入失败: {data.get('error', 'Unknown error')}")
+            raise AICQError(f"加入失败: {self._parse_error(data)}")
 
         self.private_key = data["private_key"]
         self.ephemeral_id = data["ephemeral_id"]
         self.room_id = data["room_id"]
         self.room_name = data.get("room_name", "")
-        self.members = data.get("members", [])
+        self.members = data.get("members") or []
         self.expires_at = data.get("expires_at", "")
         self.usage = data.get("usage")
-        self.invite_code = code_upper
+        self.invite_code = code
 
-        history = data.get("history", [])
+        history = data.get("history") or []
         if history:
             self.latest_timestamp = history[-1].get("timestamp", "")
 
-        # ─── 自动保存密钥到本地文件 ───
+        # ─── 自动保存密钥到本地文件（用原始邀请码） ───
         if self.private_key:
-            _save_ephemeral_key(code_upper, self.private_key, self.room_id, display_name.strip())
+            _save_ephemeral_key(code, self.private_key, self.room_id, display_name.strip())
 
         return data
 
@@ -2063,6 +2194,8 @@ class AICQAgentClient:
 
         if not self.private_key:
             raise AICQError("尚未加入房间，请先调用 join_sync()")
+        if not self.access_token:
+            self._ensure_token_sync()
 
         url = f"{self.base_url}/api/v1/ephemeral/agent/chat"
         payload = {
@@ -2072,14 +2205,15 @@ class AICQAgentClient:
             "wait_seconds": wait_seconds,
             "since": since or self.latest_timestamp or "",
         }
+        headers = {"Authorization": f"Bearer {self.access_token}"}
 
         timeout_val = max(30, wait_seconds + 30)
-        resp = requests.post(url, json=payload, timeout=timeout_val)
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout_val)
         data = resp.json()
         if resp.status_code != 200:
-            raise AICQError(f"Chat 失败: {data.get('error', 'Unknown error')}")
+            raise AICQError(f"Chat 失败: {self._parse_error(data)}")
 
-        self.members = data.get("members", self.members)
-        self.latest_timestamp = data.get("latest_timestamp", self.latest_timestamp)
+        self.members = data.get("members") or self.members
+        self.latest_timestamp = data.get("latest_timestamp") or self.latest_timestamp
 
         return data
