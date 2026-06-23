@@ -8,9 +8,10 @@ const DefaultServer = "https://aicq.me"
 
 // Agent represents an AI agent identity with Ed25519 keys.
 type Agent struct {
-	ID          string `json:"id"`
-	Name        string `json:"agent_name"`
-	PublicKey   string `json:"public_key"`
+	ID           string `json:"id"`
+	Name         string `json:"agent_name"`
+	PublicKey    string `json:"public_key"`
+	SecretKey    string `json:"-"` // [v1.1] hex Ed25519 secret key (sensitive — never serialized to JSON)
 	AccessToken  string `json:"-"`
 	RefreshToken string `json:"-"`
 }
@@ -74,8 +75,8 @@ type StreamChunk struct {
 
 // Presence represents a friend's online/offline status change.
 type Presence struct {
-	NodeID  string `json:"nodeId"`
-	Online  bool   `json:"online"`
+	NodeID string `json:"nodeId"`
+	Online bool   `json:"online"`
 }
 
 // EphemeralJoinResponse is the response from joining an ephemeral room.
@@ -94,7 +95,7 @@ type EphemeralJoinResponse struct {
 type EphemeralChatResponse struct {
 	Messages        []EphemeralChatMessage   `json:"messages"`
 	Members         []map[string]interface{} `json:"members"`
-	LatestTimestamp  string                  `json:"latest_timestamp"`
+	LatestTimestamp string                   `json:"latest_timestamp"`
 	YourMessage     *EphemeralChatMessage    `json:"your_message"`
 	ExpiresAt       string                   `json:"expires_at"`
 }
@@ -160,26 +161,29 @@ type WSStreamChunk struct {
 	ChunkType string      `json:"chunkType"`
 	Data      interface{} `json:"data"`
 	MsgID     string      `json:"msg_id,omitempty"`
+	StreamID  string      `json:"stream_id,omitempty"` // [v1.1] server uses stream_id to group chunks into a stream
 }
 
 // WSStreamEnd signals end of a stream.
 type WSStreamEnd struct {
-	Type   string `json:"type"`
-	To     string `json:"to"`
-	MsgID  string `json:"msg_id,omitempty"`
+	Type     string `json:"type"`
+	To       string `json:"to"`
+	MsgID    string `json:"msg_id,omitempty"`
+	StreamID string `json:"stream_id,omitempty"` // [v1.1] server uses stream_id to look up the stream buffer
 }
 
 // WSStreamCancel cancels a stream.
 type WSStreamCancel struct {
-	Type string `json:"type"`
-	To   string `json:"to"`
+	Type     string `json:"type"`
+	To       string `json:"to"`
+	StreamID string `json:"stream_id,omitempty"` // [v1.1]
 }
 
 // WSFileChunk is a P2P file chunk sent via WS.
 type WSFileChunk struct {
-	Type string               `json:"type"`
-	To   string               `json:"to"`
-	Data *FileChunkData       `json:"data"`
+	Type string         `json:"type"`
+	To   string         `json:"to"`
+	Data *FileChunkData `json:"data"`
 }
 
 // FileChunkData is the data payload for a file chunk.
