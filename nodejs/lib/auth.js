@@ -160,6 +160,37 @@ class AuthManager {
     listAgents() {
         return Array.from(this.agents.values());
     }
+    /**
+     * Load an existing agent identity from just the Ed25519 secret key.
+     *
+     * This is the primary entry point for one-shot invocation helpers
+     * (see invokeAgentStream) where the caller has the agent's secret key
+     * but no persisted agent record. The public key is derived locally
+     * via tweetnacl; no server round-trip is made. After calling this,
+     * call login() to authenticate with the server.
+     *
+     * @param secretKeyHex - 128-char hex Ed25519 secret key
+     * @param agentIdHint - optional account ID hint (skips a later lookup)
+     * @param nameHint - optional display name (cosmetic only)
+     * @returns the constructed Agent, also set as current
+     */
+    loadFromSecretKey(secretKeyHex, agentIdHint, nameHint) {
+        if (!secretKeyHex) {
+            throw new errors_1.AuthError("loadFromSecretKey: secretKeyHex is empty");
+        }
+        const publicKey = (0, crypto_1.derivePublicKeyFromSecret)(secretKeyHex);
+        const agent = {
+            agentId: agentIdHint ?? publicKey,
+            name: nameHint ?? "imported-agent",
+            publicKey,
+            secretKey: secretKeyHex,
+            createdAt: new Date().toISOString(),
+        };
+        this.agents.set(agent.agentId, agent);
+        this.currentAgentId = agent.agentId;
+        this.saveAgentToDisk(agent);
+        return agent;
+    }
     // ─── Login (Challenge-Response) ───
     /**
      * Full challenge-response login flow.

@@ -9,6 +9,15 @@
  */
 export declare function generateSigningKeypair(): [string, string];
 /**
+ * Derive the Ed25519 public key (hex) from a 64-byte secret key (hex).
+ * Used by one-shot invocation helpers where the caller only has the
+ * secret key (e.g. InvokeAgentStream / invokeAgentStream).
+ *
+ * @param secretKeyHex - 128-char hex Ed25519 secret key
+ * @returns 64-char hex Ed25519 public key
+ */
+export declare function derivePublicKeyFromSecret(secretKeyHex: string): string;
+/**
  * Sign a message with an Ed25519 secret key.
  * @param message  - Plaintext message to sign
  * @param secretKeyHex - Hex-encoded 64-byte Ed25519 secret key

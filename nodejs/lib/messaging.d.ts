@@ -12,6 +12,7 @@ export declare class MessagingManager {
     private httpPost;
     private wsSend;
     private getCurrentAgentId;
+    onAuthRefresh?: () => Promise<boolean>;
     private cancelledStreams;
     constructor(httpGet: (endpoint: string) => Promise<Response>, httpPost: (endpoint: string, body?: string) => Promise<Response>, wsSend: (msg: Record<string, unknown>) => boolean, getCurrentAgentId: () => string | null);
     /**

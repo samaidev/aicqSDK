@@ -9,6 +9,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.generateSigningKeypair = generateSigningKeypair;
+exports.derivePublicKeyFromSecret = derivePublicKeyFromSecret;
 exports.sign = sign;
 exports.verify = verify;
 exports.generateExchangeKeypair = generateExchangeKeypair;
@@ -35,6 +36,24 @@ function hexDecode(hex) {
 function generateSigningKeypair() {
     const keypair = tweetnacl_1.default.sign.keyPair();
     return [hexEncode(keypair.publicKey), hexEncode(keypair.secretKey)];
+}
+/**
+ * Derive the Ed25519 public key (hex) from a 64-byte secret key (hex).
+ * Used by one-shot invocation helpers where the caller only has the
+ * secret key (e.g. InvokeAgentStream / invokeAgentStream).
+ *
+ * @param secretKeyHex - 128-char hex Ed25519 secret key
+ * @returns 64-char hex Ed25519 public key
+ */
+function derivePublicKeyFromSecret(secretKeyHex) {
+    const secretKey = hexDecode(secretKeyHex);
+    if (secretKey.length !== 64) {
+        throw new Error(`Invalid Ed25519 secret key length: expected 64 bytes (128 hex chars), got ${secretKey.length} bytes`);
+    }
+    // tweetnacl's sign.keyPair.fromSecretKey expects the 64-byte expanded form
+    // and returns the corresponding 32-byte public key.
+    const keypair = tweetnacl_1.default.sign.keyPair.fromSecretKey(secretKey);
+    return hexEncode(keypair.publicKey);
 }
 /**
  * Sign a message with an Ed25519 secret key.

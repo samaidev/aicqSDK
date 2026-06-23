@@ -230,6 +230,23 @@ class MessagingManager {
             body: formData,
             headers: this.getAuthHeaders(),
         });
+        // Auto-retry on 401 (refresh token then retry)
+        if (res.status === 401) {
+            const refreshed = await this.onAuthRefresh?.();
+            if (refreshed) {
+                const retryRes = await fetch(url, {
+                    method: "POST",
+                    body: formData,
+                    headers: this.getAuthHeaders(),
+                });
+                if (!retryRes.ok) {
+                    const errText = await retryRes.text().catch(() => "Unknown error");
+                    throw new errors_1.AICQError(`File upload failed after auth refresh: ${errText}`, retryRes.status, "/api/v1/chat/upload");
+                }
+                const retryData = (await retryRes.json());
+                return retryData.url;
+            }
+        }
         if (!res.ok) {
             const errText = await res.text().catch(() => "Unknown error");
             throw new errors_1.AICQError(`File upload failed: ${errText}`, res.status, "/api/v1/chat/upload");

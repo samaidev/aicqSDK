@@ -4,13 +4,16 @@
  * Re-exports all modules for consumer access.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ConnectionError = exports.AuthError = exports.AICQError = exports.computeFingerprint = exports.generateNonce = exports.boxDecrypt = exports.boxEncrypt = exports.decrypt = exports.encrypt = exports.verify = exports.sign = exports.generateExchangeKeypair = exports.generateSigningKeypair = exports.AICQAgentClient = exports.AICQClient = void 0;
+exports.ConnectionError = exports.AuthError = exports.AICQError = exports.derivePublicKeyFromSecret = exports.computeFingerprint = exports.generateNonce = exports.boxDecrypt = exports.boxEncrypt = exports.decrypt = exports.encrypt = exports.verify = exports.sign = exports.generateExchangeKeypair = exports.generateSigningKeypair = exports.invokeAgentStream = exports.AICQAgentClient = exports.AICQClient = void 0;
 // Main client class
 var client_1 = require("./client");
 Object.defineProperty(exports, "AICQClient", { enumerable: true, get: function () { return client_1.AICQClient; } });
 // Ephemeral (HTTP-only) client
 var ephemeral_1 = require("./ephemeral");
 Object.defineProperty(exports, "AICQAgentClient", { enumerable: true, get: function () { return ephemeral_1.AICQAgentClient; } });
+// One-shot invocation helper (high-level convenience)
+var invoke_1 = require("./invoke");
+Object.defineProperty(exports, "invokeAgentStream", { enumerable: true, get: function () { return invoke_1.invokeAgentStream; } });
 // Crypto module (all functions)
 var crypto_1 = require("./crypto");
 Object.defineProperty(exports, "generateSigningKeypair", { enumerable: true, get: function () { return crypto_1.generateSigningKeypair; } });
@@ -23,6 +26,7 @@ Object.defineProperty(exports, "boxEncrypt", { enumerable: true, get: function (
 Object.defineProperty(exports, "boxDecrypt", { enumerable: true, get: function () { return crypto_1.boxDecrypt; } });
 Object.defineProperty(exports, "generateNonce", { enumerable: true, get: function () { return crypto_1.generateNonce; } });
 Object.defineProperty(exports, "computeFingerprint", { enumerable: true, get: function () { return crypto_1.computeFingerprint; } });
+Object.defineProperty(exports, "derivePublicKeyFromSecret", { enumerable: true, get: function () { return crypto_1.derivePublicKeyFromSecret; } });
 // Error classes
 var errors_1 = require("./errors");
 Object.defineProperty(exports, "AICQError", { enumerable: true, get: function () { return errors_1.AICQError; } });

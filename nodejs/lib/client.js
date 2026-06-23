@@ -28,7 +28,7 @@ class AICQClient {
         // Initialize auth manager
         this.auth = new auth_1.AuthManager(serverUrl);
         // Initialize WebSocket manager
-        const wsUrl = serverUrl.replace(/^https?/, "wss").replace(/\/$/, "") + "/ws";
+        const wsUrl = serverUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:").replace(/\/$/, "") + "/ws";
         this.ws = new websocket_1.WSManager(wsUrl);
         this.ws.setTokenProvider(() => this.auth.getAccessToken());
         this.ws.setOnReconnect(async () => {
@@ -40,6 +40,15 @@ class AICQClient {
         this.messaging = new messaging_1.MessagingManager((ep) => this.httpGet(ep), (ep, body) => this.httpPost(ep, body), (msg) => this.ws.send(msg), () => this.auth.getCurrentAgent()?.agentId ?? null);
         this.messaging.setApiBase(this.apiBase);
         this.messaging.setAuthHeadersFn(() => this.buildAuthHeaders());
+        this.messaging.onAuthRefresh = async () => {
+            try {
+                await this.auth.ensureAuth();
+                return true;
+            }
+            catch {
+                return false;
+            }
+        };
     }
     // ─── Identity & Auth ───
     /**

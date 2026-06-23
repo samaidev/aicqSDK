@@ -9,6 +9,14 @@ export { AICQClient } from "./client";
 // Ephemeral (HTTP-only) client
 export { AICQAgentClient } from "./ephemeral";
 
+// One-shot invocation helper (high-level convenience)
+export {
+  invokeAgentStream,
+  type AgentMessageContent,
+  type StreamEvent,
+  type InvokeAgentStreamOptions,
+} from "./invoke";
+
 // Crypto module (all functions)
 export {
   generateSigningKeypair,
@@ -21,6 +29,7 @@ export {
   boxDecrypt,
   generateNonce,
   computeFingerprint,
+  derivePublicKeyFromSecret,
 } from "./crypto";
 
 // Error classes

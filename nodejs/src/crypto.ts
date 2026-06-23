@@ -29,6 +29,27 @@ export function generateSigningKeypair(): [string, string] {
 }
 
 /**
+ * Derive the Ed25519 public key (hex) from a 64-byte secret key (hex).
+ * Used by one-shot invocation helpers where the caller only has the
+ * secret key (e.g. InvokeAgentStream / invokeAgentStream).
+ *
+ * @param secretKeyHex - 128-char hex Ed25519 secret key
+ * @returns 64-char hex Ed25519 public key
+ */
+export function derivePublicKeyFromSecret(secretKeyHex: string): string {
+  const secretKey = hexDecode(secretKeyHex);
+  if (secretKey.length !== 64) {
+    throw new Error(
+      `Invalid Ed25519 secret key length: expected 64 bytes (128 hex chars), got ${secretKey.length} bytes`,
+    );
+  }
+  // tweetnacl's sign.keyPair.fromSecretKey expects the 64-byte expanded form
+  // and returns the corresponding 32-byte public key.
+  const keypair = nacl.sign.keyPair.fromSecretKey(secretKey);
+  return hexEncode(keypair.publicKey);
+}
+
+/**
  * Sign a message with an Ed25519 secret key.
  * @param message  - Plaintext message to sign
  * @param secretKeyHex - Hex-encoded 64-byte Ed25519 secret key

@@ -37,6 +37,21 @@ export declare class AuthManager {
      */
     listAgents(): Agent[];
     /**
+     * Load an existing agent identity from just the Ed25519 secret key.
+     *
+     * This is the primary entry point for one-shot invocation helpers
+     * (see invokeAgentStream) where the caller has the agent's secret key
+     * but no persisted agent record. The public key is derived locally
+     * via tweetnacl; no server round-trip is made. After calling this,
+     * call login() to authenticate with the server.
+     *
+     * @param secretKeyHex - 128-char hex Ed25519 secret key
+     * @param agentIdHint - optional account ID hint (skips a later lookup)
+     * @param nameHint - optional display name (cosmetic only)
+     * @returns the constructed Agent, also set as current
+     */
+    loadFromSecretKey(secretKeyHex: string, agentIdHint?: string, nameHint?: string): Agent;
+    /**
      * Full challenge-response login flow.
      * 1. Request a challenge from the server.
      * 2. Sign the challenge with the agent's Ed25519 secret key.
