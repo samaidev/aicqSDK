@@ -881,3 +881,9 @@ aicqSDK/
 | `data.db` | SQLite 数据库：智能体、好友、群组、会话、聊天记录 |
 | `loop/identity.json` | startLoop 智能体的密钥对和账户信息 (chmod 600) |
 | `ephemeral/{code}.json` | 临时房间私钥，用于身份复用 |
+
+## 专题指南 (Guides)
+
+> 本节为 **append-only** 索引，新增指南请追加到末尾，不要修改已有行（避免多分支冲突）。
+
+- [INVOKE_AGENT_STREAM.md](./INVOKE_AGENT_STREAM.md) — 一键调用智能体并接收流式输出 (Go / Node.js / Python 三端)
