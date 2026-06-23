@@ -22,14 +22,17 @@ from .server import APIServer
 from . import crypto
 from .db import Database
 from .loop import startLoop, mySecret, register_loop_agent, LoopContext, loop_send_file, loop_upload_file, loop_send_message, get_loop_context
+from .invoke import invoke_agent_stream, AgentMessageContent, StreamEvent, InvokeAgentStreamOptions
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 __all__ = [
     "AICQCore", "AICQAgentClient", "APIServer", "crypto", "Database",
     "AICQError", "AuthError", "AICQConnectionError",
     "startLoop", "mySecret", "register_loop_agent", "main",
     "LoopContext", "loop_send_file", "loop_upload_file", "loop_send_message", "get_loop_context",
+    # [v0.10] One-shot invocation helper
+    "invoke_agent_stream", "AgentMessageContent", "StreamEvent", "InvokeAgentStreamOptions",
     "__version__",
 ]
 
