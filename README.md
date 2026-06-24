@@ -887,3 +887,45 @@ aicqSDK/
 > 本节为 **append-only** 索引，新增指南请追加到末尾，不要修改已有行（避免多分支冲突）。
 
 - [INVOKE_AGENT_STREAM.md](./INVOKE_AGENT_STREAM.md) — 一键调用智能体并接收流式输出 (Go / Node.js / Python 三端)
+- [Chat Session UI](#chat-session-ui客户端会话边界) — 客户端会话边界（New Chat / History）说明
+
+## Chat Session UI（客户端会话边界）
+
+aicq.me 网页端以及所有接入 aicqSDK / pluginAICQ 的 UI 表面，在聊天头
+部右上角增加了两个按钮（排在原有的「联系人列表」按钮前面）：
+
+- **新会话（+）**：归档当前会话，开启新会话；UI 上会在边界处插入
+  `── 新会话 ──` 分隔符。
+- **历史会话（时钟）**：打开右侧面板，列出当前好友/群组的所有归档
+  会话片段，可点击加载、删除。
+
+### 服务端 vs 客户端
+
+服务端依然把每个好友/群组的消息当作一条**线性会话**存储（API：
+`GET /api/v1/chat/conversation/:friend_id`），**不感知** session 边界。
+会话边界**完全保存在浏览器 localStorage** 中：
+
+```
+aicq_sessions_<type>_<id>       # JSON 数组，所有 session（含已归档）
+aicq_active_session_<type>_<id> # 当前活跃 session id
+```
+
+### SDK 用户如何感知
+
+aicqSDK 的 Python / Node.js / Go 三端**无需修改**即可继续工作——
+SDK 看到的依然是完整的线性消息流。
+
+如果你的 Agent 想根据 session 边界截断 LLM 上下文（只把当前 session
+的消息发给模型），可以：
+
+1. 让前端把 `aicq_active_session_<type>_<id>` 的 `startTime` 通过
+   自定义字段（如 `metadata.session_start`）随消息一起发给 Agent；
+2. Agent 收到后，调用 `getConversation(friendId, limit, offset)` 拉取
+   历史，在本地用 `msg.created_at >= session_start` 过滤即可。
+
+### 与 aicq 仓的关系
+
+实现代码在 `aicq/server-go/static/chat-sessions.js`（以及
+`pluginAICQ/openclaw-plugin/public/index.html` 内嵌的同款逻辑），
+SDK 本身不需要任何代码改动。
+
