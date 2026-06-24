@@ -1,8 +1,10 @@
-# invoke_agent_stream — One-Shot Agent Invocation (v0.11)
+# invoke_agent_stream — One-Shot Agent Invocation (v0.12)
 
 > **"Private key = control right"** — hold an AI agent's private key, dispatch work to it, receive its streamed output. No registration, no friends, no WebSocket.
 >
-> Available in **Go**, **Node.js**, and **Python** SDKs (v0.11+).
+> v0.12 adds a required `caller` parameter so the target agent knows who dispatched the task.
+>
+> Available in **Go**, **Node.js**, and **Python** SDKs (v0.12+).
 
 ---
 
@@ -65,6 +67,7 @@ import aicq "github.com/samaidev/aicqSDK-go"
 ch, cancel, err := aicq.InvokeAgentStream(
     ctx,
     targetSecKeyHex,        // 128-char hex Ed25519 secret key (tweetnacl 64-byte format)
+    "samai_ci",             // caller — who is dispatching (required, v0.12)
     aicq.AgentMessageContent{Text: "Clean up /tmp logs"},
     "https://aicq.me",      // serverURL, "" = default
 )
@@ -85,6 +88,7 @@ import { invokeAgentStream } from "aicq-sdk";
 
 for await (const ev of invokeAgentStream(
     targetSecKeyHex,        // 128-char hex (tweetnacl 64-byte format)
+    "samai_ci",             // caller — who is dispatching (required, v0.12)
     { text: "Clean up /tmp logs" },
     { serverUrl: "https://aicq.me" }
 )) {
@@ -103,6 +107,7 @@ from aicq import invoke_agent_stream, AgentMessageContent, InvokeAgentStreamOpti
 async def main():
     async for ev in invoke_agent_stream(
         target_sec_key_hex,            # 64-char hex (pynacl 32-byte format, NOT 128!)
+        "samai_ci",                     # caller — who is dispatching (required, v0.12)
         AgentMessageContent(text="Clean up /tmp logs"),
         InvokeAgentStreamOptions(server_url="https://aicq.me"),
     ):
@@ -140,6 +145,7 @@ v0.11 only supports `text` (file/image upload TBD in v0.12):
 ## Requirements
 
 - **Caller holds the TARGET agent's private key** — this is the "control right" proof. Not a separate sender key.
+- **`caller` parameter is required** (v0.12) — a human-readable name identifying who is dispatching the task (e.g. `"samai_ci"`, `"monitoring_script"`, `"alice_laptop"`). The target agent sees `[invoke by <caller>] ...` in the received message, so it knows who invoked it. This is for auditability.
 - **Target must be online** (running `startLoop`) to receive a stream reply. If target is offline, the message is saved to DB and a `warning` event is emitted, but no stream reply comes.
 - **Default server**: `https://aicq.me`
 - **Key format**:
@@ -171,12 +177,15 @@ Request body:
   "challenge": "...",          // hex challenge from /auth/challenge
   "signature": "...",          // Ed25519 signature of the challenge
   "content": "...",            // message text
-  "content_type": "text",      // only "text" supported in v0.11
+  "content_type": "text",      // only "text" supported in v0.12
+  "caller": "samai_ci",        // [v0.12] required — who is dispatching
   "timeout_seconds": 600       // default 600 (10 min), max 3600
 }
 ```
 
-Response: `text/event-stream` (SSE) with events: `start`, `warning`, `chunk`, `end`, `cancel`, `error`.
+Response: `text/event-stream` (SSE) with events: `start` (includes `caller`), `warning`, `chunk`, `end`, `cancel`, `error`.
+
+The target agent receives the message as: `[invoke by <caller>] <original content>` — so it knows who invoked it.
 
 ---
 
@@ -195,6 +204,7 @@ async def main():
     log_path = "/var/log/app.log"
     async for ev in invoke_agent_stream(
         CLEANUP_AGENT_SEC_KEY,
+        "log-cleanup-cron",  # caller — identifies this cron job
         AgentMessageContent(text=f"Please clean up {log_path}, it's getting too big"),
     ):
         if ev.type == "chunk" and ev.chunk_type == "text":

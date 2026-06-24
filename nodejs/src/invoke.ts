@@ -56,13 +56,16 @@ export interface InvokeAgentStreamOptions {
  *
  * @param targetSecKeyHex - TARGET's 128-char hex Ed25519 secret key
  *                          (tweetnacl 64-byte expanded format).
+ * @param caller          - Human-readable name identifying who is dispatching
+ *                          the task (e.g. "samai_ci"). Required — target sees
+ *                          "[invoke by <caller>] ..." in the message.
  * @param content         - What to send. v0.11 only supports `text`.
  * @param options         - Optional server URL / signal / timeout.
  * @yields StreamEvent
  *
  * @example
  * ```ts
- * for await (const ev of invokeAgentStream(targetSecKey, { text: "Hi" })) {
+ * for await (const ev of invokeAgentStream(targetSecKey, "samai_ci", { text: "Hi" })) {
  *   if (ev.type === "chunk" && ev.chunkType === "text") {
  *     process.stdout.write(String(ev.data));
  *   }
@@ -71,11 +74,19 @@ export interface InvokeAgentStreamOptions {
  */
 export async function* invokeAgentStream(
   targetSecKeyHex: string,
+  caller: string,
   content: AgentMessageContent,
   options: InvokeAgentStreamOptions = {},
 ): AsyncIterable<StreamEvent> {
   if (!targetSecKeyHex) {
     throw new AICQError("invokeAgentStream: targetSecKeyHex is empty", 0, "(local)");
+  }
+  if (!caller) {
+    throw new AICQError(
+      "invokeAgentStream: caller is required (identify who is dispatching the task, e.g. 'samai_ci')",
+      0,
+      "(local)",
+    );
   }
   if (!content.text) {
     throw new AICQError(
@@ -108,6 +119,7 @@ export async function* invokeAgentStream(
     signature,
     content: content.text,
     content_type: "text",
+    caller,
     timeout_seconds: Math.floor(timeoutMs / 1000),
   });
 

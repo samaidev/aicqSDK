@@ -21,6 +21,7 @@ Example::
     async def main():
         async for ev in invoke_agent_stream(
             target_sec_key_hex,            # 64-char hex (pynacl 32-byte format)
+            "samai_ci",                     # caller — who is dispatching
             AgentMessageContent(text="Clean up /tmp logs"),
         ):
             if ev.type == "chunk" and ev.chunk_type == "text":
@@ -92,6 +93,7 @@ class InvokeAgentStreamOptions:
 
 async def invoke_agent_stream(
     target_sec_key_hex: str,
+    caller: str,
     content: AgentMessageContent,
     options: Optional[InvokeAgentStreamOptions] = None,
 ) -> AsyncIterator[StreamEvent]:
@@ -105,6 +107,9 @@ async def invoke_agent_stream(
     Parameters:
         target_sec_key_hex: TARGET's 64-char hex Ed25519 secret key
             (pynacl 32-byte format, NOT tweetnacl's 64-byte expanded form).
+        caller: Human-readable name identifying who is dispatching the task
+            (e.g. "samai_ci", "monitoring_script"). Required — the target
+            agent sees "[invoke by <caller>] ..." in the message.
         content: What to send. v0.11 only supports ``text``.
         options: Optional server URL / timeout.
 
@@ -117,6 +122,11 @@ async def invoke_agent_stream(
     """
     if not target_sec_key_hex:
         raise AICQError("invoke_agent_stream: target_sec_key_hex is empty")
+    if not caller:
+        raise AICQError(
+            "invoke_agent_stream: caller is required "
+            "(identify who is dispatching the task, e.g. 'samai_ci')"
+        )
     if not content.text:
         raise AICQError(
             "invoke_agent_stream: v0.11 currently only supports content.text "
@@ -142,6 +152,7 @@ async def invoke_agent_stream(
         "signature": signature,
         "content": content.text,
         "content_type": "text",
+        "caller": caller,
         "timeout_seconds": int(opts.timeout_seconds),
     }
 
