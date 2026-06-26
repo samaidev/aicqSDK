@@ -451,7 +451,6 @@ func (w *WSManager) SendStreamChunk(to, chunkType string, data interface{}) erro
                 To:        to,
                 ChunkType: chunkType,
                 Data:      data,
-                StreamID:  fmt.Sprintf("stream_%d_%s", time.Now().UnixMilli(), randomHex(6)), // [FIX 2026-06-26]
         }
         return w.sendWSJSON(msg)
 }
@@ -464,7 +463,6 @@ func (w *WSManager) SendStreamChunkWithID(to, chunkType string, data interface{}
                 ChunkType: chunkType,
                 Data:      data,
                 MsgID:     msgID,
-                StreamID:  msgID, // [FIX 2026-06-26] stream_id must match stream_end
         }
         return w.sendWSJSON(msg)
 }
@@ -474,8 +472,7 @@ func (w *WSManager) SendStreamEnd(to, msgID string) error {
         msg := WSStreamEnd{
                 Type:  "stream_end",
                 To:    to,
-                MsgID:    msgID,
-                StreamID: msgID, // [FIX 2026-06-26] stream_id to look up the stream buffer
+                MsgID: msgID,
         }
         return w.sendWSJSON(msg)
 }
@@ -484,8 +481,7 @@ func (w *WSManager) SendStreamEnd(to, msgID string) error {
 func (w *WSManager) SendStreamCancel(to string) error {
         msg := WSStreamCancel{
                 Type: "stream_cancel",
-                To:       to,
-                StreamID: to, // [FIX 2026-06-26] identify which stream to cancel
+                To:   to,
         }
         return w.sendWSJSON(msg)
 }

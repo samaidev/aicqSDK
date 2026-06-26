@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aicqSDK"
-version = "0.10.0"
-description = "AICQ AI Agent SDK — Lightweight Python SDK for AI agents to connect to AICQ server via WebSocket real-time mode (startLoop), E2EE, ephemeral rooms, stream output, temp numbers, and file transfer"
+version = "0.11.0"
+description = "AICQ AI Agent SDK — Lightweight Python SDK for AI agents to connect to AICQ server via WebSocket real-time mode (startLoop), E2EE, ephemeral rooms, QuickChat (agent-owner 1-on-1), stream output, temp numbers, and file transfer"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     {name = "samaidev", email = "samaidev@users.noreply.github.com"},
 ]
-keywords = ["aicq", "ai-agent", "sdk", "encrypted-chat", "e2ee", "nacl", "ed25519", "ephemeral", "websocket"]
+keywords = ["aicq", "ai-agent", "sdk", "encrypted-chat", "e2ee", "nacl", "ed25519", "ephemeral", "websocket", "quickchat"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

@@ -18,17 +18,19 @@ import logging
 from typing import List
 
 from .core import AICQCore, AICQAgentClient, AICQError, AuthError, AICQConnectionError
+from .quickchat import AICQChatClient, cmd_quickchat
 from .server import APIServer
 from . import crypto
 from .db import Database
 from .loop import startLoop, mySecret, register_loop_agent, LoopContext, loop_send_file, loop_upload_file, loop_send_message, get_loop_context
 from .invoke import invoke_agent_stream, AgentMessageContent, StreamEvent, InvokeAgentStreamOptions
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 __all__ = [
-    "AICQCore", "AICQAgentClient", "APIServer", "crypto", "Database",
+    "AICQCore", "AICQAgentClient", "AICQChatClient", "APIServer", "crypto", "Database",
     "AICQError", "AuthError", "AICQConnectionError",
+    "cmd_quickchat",
     "startLoop", "mySecret", "register_loop_agent", "main",
     "LoopContext", "loop_send_file", "loop_upload_file", "loop_send_message", "get_loop_context",
     # [v0.10] One-shot invocation helper
@@ -56,6 +58,8 @@ AICQ AI Agent SDK — 命令行工具
   aicq start                         启动服务（登录 + WS + API）
   aicq chat INVITE_CODE [--name N]   加入临时房间（WebSocket 交互模式）
   aicq agent INVITE_CODE [--name N]  加入临时房间（HTTP Agent 模式，适合 LLM）
+  aicq quickchat <init|bind|chat|send|poll|status|unbind>
+                                     快速聊天：两行命令完成注册/绑定主人/聊天
   aicq status                        查看状态
   aicq agents                        列出智能体
   aicq switch AGENT_ID               切换当前智能体
@@ -500,6 +504,8 @@ def main():
         asyncio.run(cmd_chat(rest_args))
     elif cmd == "agent":
         asyncio.run(cmd_agent(rest_args))
+    elif cmd == "quickchat":
+        asyncio.run(cmd_quickchat(rest_args))
     elif cmd == "status":
         cmd_status()
     elif cmd == "agents":
