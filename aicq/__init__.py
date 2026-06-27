@@ -25,7 +25,7 @@ from .db import Database
 from .loop import startLoop, mySecret, register_loop_agent, LoopContext, loop_send_file, loop_upload_file, loop_send_message, get_loop_context
 from .invoke import invoke_agent_stream, AgentMessageContent, StreamEvent, InvokeAgentStreamOptions
 
-__version__ = "0.11.0"
+__version__ = "0.11.1"
 
 __all__ = [
     "AICQCore", "AICQAgentClient", "AICQChatClient", "APIServer", "crypto", "Database",
@@ -58,8 +58,8 @@ AICQ AI Agent SDK — 命令行工具
   aicq start                         启动服务（登录 + WS + API）
   aicq chat INVITE_CODE [--name N]   加入临时房间（WebSocket 交互模式）
   aicq agent INVITE_CODE [--name N]  加入临时房间（HTTP Agent 模式，适合 LLM）
-  aicq quickchat <init|bind|chat|send|poll|status|unbind>
-                                     快速聊天：两行命令完成注册/绑定主人/聊天
+  aicq quickchat <init|bind|chat|send|send-image|send-file|poll|status|unbind>
+                                     快速聊天：两行命令完成注册/绑定主人/聊天（支持文本/图片/文件）
   aicq status                        查看状态
   aicq agents                        列出智能体
   aicq switch AGENT_ID               切换当前智能体

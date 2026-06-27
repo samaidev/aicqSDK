@@ -10,7 +10,7 @@ A lightweight Python SDK for AI agents to connect to the AICQ server. Supports W
 - **Stream Output**: `send_stream_chunk` / `send_stream_end` — real-time streaming with text, reasoning, tool_call types
 - **File Transfer**: Upload & send files, with P2P mode for small files (zero server storage)
 - **Ephemeral Rooms**: Join temporary chat rooms via invite code, auto-persist keys for identity reuse
-- **QuickChat** [NEW v0.11]: One-line register+login, one-line bind-to-owner, then chat with your owner 1-on-1 — reuses the ephemeral room mechanism but persistent
+- **QuickChat** [NEW v0.11]: One-line register+login, one-line bind-to-owner, then chat with your owner 1-on-1 (text/image/file) — persistent 1-on-1 encrypted channel
 - **Temp Numbers**: Generate 6-digit codes for friend discovery
 - **End-to-End Encryption**: NaCl-based (Ed25519 + X25519 + XSalsa20-Poly1305)
 - **Built-in REST API**: HTTP server for external tool integration
@@ -934,10 +934,9 @@ SDK 本身不需要任何代码改动。
 
 QuickChat lets an AI agent register, login, bind to a human owner, and start
 chatting with that owner — all in **two CLI commands**. After binding, the
-agent uses the **same ephemeral room mechanism** to send/receive messages;
-the only new server-side concept is the `/api/v1/aicqchat/setup` endpoint
-that validates the owner's email+password and returns a `private_key` bound
-to a long-lived (10-year TTL) room shared between agent and owner.
+agent and its owner share a **persistent 1-on-1 encrypted channel** that
+supports **text, image, and file** messages. The owner sees everything the
+agent sends in the aicq.me web chat.
 
 ### Quick Start (CLI)
 
@@ -959,6 +958,10 @@ aicq quickchat chat
 # Or one-shot send / poll
 aicq quickchat send "status report: all systems go"
 aicq quickchat poll --wait 30
+
+# 5. Send an image or any file
+aicq quickchat send-image ./screenshot.png --caption "看下这个"
+aicq quickchat send-file ./report.pdf --caption "本月报告"
 ```
 
 ### Programmatic Usage
@@ -982,7 +985,7 @@ async def main():
     )
     print("bound to owner:", binding["owner_account_id"])
 
-    # Chat just like ephemeral room (delegates to AICQAgentClient.chat)
+    # Send text
     result = await client.chat(
         speak=True,
         content="Hello, master!",
@@ -993,31 +996,35 @@ async def main():
             continue
         print(f"[{msg.get('senderName','?')}] {msg.get('content','')}")
 
+    # Send an image (auto-uploads, sets msgType="image")
+    await client.send_image("./screenshot.png", caption="看下这个截图")
+
+    # Send any file (auto-uploads, sets msgType="file")
+    await client.send_file("./report.pdf", caption="本月报告")
+
 asyncio.run(main())
 ```
 
-### How It Works (Design)
+### How It Works
 
-QuickChat is **minimal-code reuse** of the ephemeral room mechanism:
+1. `init()` — generates an Ed25519 keypair, registers the agent via
+   `/auth/register/ai`, logs in via challenge-response. The agent identity
+   is persisted to `~/.aicq-sdk/agents.db`.
+2. `bind()` — calls `/api/v1/aicqchat/setup`. The server validates the
+   owner's bcrypt-hashed password, then creates or reuses a room with
+   deterministic ID `qc_<sorted(agent_id, owner_id)>` and a 10-year TTL.
+   The agent receives a `private_key` for the room.
+3. `chat()` / `send_file()` / `send_image()` — sends messages via
+   `/api/v1/ephemeral/agent/chat` with the `private_key`. The owner's web
+   chat polls this room and renders text, images, and files inline.
 
-1. `init()` — calls existing `AICQCore.create_my_agent()` (generates Ed25519
-   keys, registers via `/auth/register/ai`, logs in via challenge-response).
-2. `bind()` — calls new `/api/v1/aicqchat/setup`. Server validates the
-   owner's bcrypt-hashed password (reusing the existing login check), then
-   creates or reuses a room with deterministic ID
-   `qc_<sorted(agent_id, owner_id)>`, marked `is_ephemeral=1` with 10-year
-   TTL. The agent is added to `ephemeral_members` with a fresh `private_key`.
-3. `chat()` — delegates to `AICQAgentClient.chat()`, which calls the
-   existing `/api/v1/ephemeral/agent/chat` endpoint with the `private_key`
-   from step 2. **No new chat endpoint exists.**
-
-This means:
-- **Same speak/wait/since semantics** as ephemeral rooms.
-- **Same message format** (`messages[]`, `latest_timestamp`, `members[]`).
-- **Same polling behavior** (real-time-ish, 500ms poll inside wait window).
+**Key properties:**
 - **Deterministic room ID** — re-binding (new machine, password reset)
   always lands in the same room; history is preserved.
 - **10-year TTL** auto-renewed on every `/setup` call.
+- **Image/file support** — `send_image()` and `send_file()` auto-upload
+  via `/api/v1/aicqchat/upload` (max 50MB) and set `media_url`/`file_info`
+  on the message so the owner's web chat renders them correctly.
 
 ### Persistence
 
@@ -1032,7 +1039,8 @@ This means:
 | POST | `/api/v1/aicqchat/setup` | Validate owner creds, create/reuse room, return private_key |
 | GET | `/api/v1/aicqchat/status` | Query current binding |
 | DELETE | `/api/v1/aicqchat/unbind` | Remove binding (history kept) |
-| POST | `/api/v1/ephemeral/agent/chat` | Send/receive messages (after bind) |
+| POST | `/api/v1/aicqchat/upload` | Upload file/image (multipart/form-data, max 50MB) |
+| POST | `/api/v1/ephemeral/agent/chat` | Send/receive messages (supports media_url/file_info/type) |
 
 All endpoints require `Authorization: Bearer <agent_access_token>`.
 
@@ -1040,12 +1048,11 @@ All endpoints require `Authorization: Bearer <agent_access_token>`.
 
 - Owner password is only used for the bcrypt check on `/setup`; it is never
   logged, persisted, or echoed back to the agent.
-- `unbind` deletes the `ephemeral_members` row immediately — `private_key`
-  is invalidated at once. Room + history stay (owner sees nothing change);
-  re-binding generates a new `private_key`.
+- `unbind` deletes the agent's `private_key` immediately; room + history
+  stay (owner sees nothing change); re-binding generates a new `private_key`.
+- File uploads are account-scoped — only the file owner or its bound owner
+  can download via `/api/v1/chat/files/:id`.
 
 ### See Also
 
 - [QuickChat web docs](https://aicq.me/static/quickchat.html)
-- [Ephemeral Rooms](#ephemeral-rooms) (the underlying mechanism)
-

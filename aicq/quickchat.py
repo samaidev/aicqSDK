@@ -240,30 +240,219 @@ class AICQChatClient:
         wait_seconds: int = 0,
         since: str = "",
     ) -> Dict[str, Any]:
-        """Send a message and/or poll for new messages.
+        """Send a text message and/or poll for new messages.
 
-        Delegates to AICQAgentClient.chat() — same speak/wait/since
-        semantics as the ephemeral room.
-
-        Args:
-            speak: if True, send `content` as a message
-            content: message text (required if speak=True)
-            wait_seconds: 0-300, how long to wait for replies
-            since: ISO timestamp; messages newer than this are returned
-
-        Returns:
-            Server response: messages, members, expires_at,
-            your_message (if spoke), latest_timestamp, waited_seconds.
+        Delegates to the full chat() method below with media_url="" and
+        msg_type="text". Use send_file() / send_image() for media messages.
         """
-        agent = await self._ensure_agent()
-        if not agent.private_key:
-            raise AICQError("尚未绑定主人，请先 await client.bind(email, password)")
-        return await agent.chat(
+        return await self._chat_full(
             speak=speak,
             content=content,
             wait_seconds=wait_seconds,
             since=since,
+            media_url="",
+            file_info="",
+            msg_type="text",
         )
+
+    async def upload_file(self, file_path: str) -> Dict[str, Any]:
+        """Upload a file/image to the server. Returns a dict with file_id,
+        url, filename, file_size, mime_type, is_image.
+
+        The returned ``url`` should be passed as ``media_url`` to chat() when
+        sending the file as a message. The SDK's send_file() and send_image()
+        methods do this automatically.
+        """
+        core = await self._ensure_core()
+        if not core.access_token:
+            raise AICQError("未登录，请先 init()")
+
+        import aiohttp
+        path = os.path.expanduser(file_path)
+        if not os.path.exists(path):
+            raise AICQError(f"文件不存在: {path}")
+
+        # Use aiohttp's FormData for multipart upload
+        form = aiohttp.FormData()
+        form.add_field(
+            "file",
+            open(path, "rb"),
+            filename=os.path.basename(path),
+            content_type=self._guess_mime(path),
+        )
+        url = f"{self.server}/api/v1/aicqchat/upload"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, data=form,
+                headers={"Authorization": f"Bearer {core.access_token}"},
+                timeout=aiohttp.ClientTimeout(total=120),
+            ) as resp:
+                data = await resp.json()
+                if resp.status != 201:
+                    raise AICQError(f"上传失败: {data}")
+                return data
+
+    async def send_file(
+        self,
+        file_path: str,
+        caption: str = "",
+        wait_seconds: int = 0,
+    ) -> Dict[str, Any]:
+        """Upload a file and send it as a 'file' message to the owner.
+
+        Args:
+            file_path: local path to the file
+            caption: optional text caption / description
+            wait_seconds: how long to wait for owner reply (0 = don't wait)
+
+        Returns:
+            The chat() response (messages, your_message, etc.)
+        """
+        upload = await self.upload_file(file_path)
+        file_info = json.dumps({
+            "name": upload.get("original_name") or upload.get("filename", ""),
+            "size": upload.get("file_size", 0),
+            "mime_type": upload.get("mime_type", ""),
+        })
+        return await self.chat(
+            speak=True,
+            content=caption,
+            media_url=upload["url"],
+            file_info=file_info,
+            msg_type="file",
+            wait_seconds=wait_seconds,
+        )
+
+    async def send_image(
+        self,
+        file_path: str,
+        caption: str = "",
+        wait_seconds: int = 0,
+    ) -> Dict[str, Any]:
+        """Upload an image and send it as an 'image' message to the owner.
+
+        Same as send_file() but sets msgType="image" so the owner's web chat
+        renders it as an inline thumbnail instead of a download link.
+
+        Args:
+            file_path: local path to the image
+            caption: optional text caption
+            wait_seconds: how long to wait for owner reply (0 = don't wait)
+        """
+        upload = await self.upload_file(file_path)
+        if not upload.get("is_image"):
+            # Server said this isn't an image — fall back to send_file semantics
+            logger.warning("文件 %s 不是图片(mime=%s)，将作为普通文件发送",
+                           file_path, upload.get("mime_type"))
+            return await self.send_file(file_path, caption, wait_seconds)
+
+        file_info = json.dumps({
+            "name": upload.get("original_name") or upload.get("filename", ""),
+            "size": upload.get("file_size", 0),
+            "mime_type": upload.get("mime_type", ""),
+            "width": 0,
+            "height": 0,
+        })
+        return await self.chat(
+            speak=True,
+            content=caption,
+            media_url=upload["url"],
+            file_info=file_info,
+            msg_type="image",
+            wait_seconds=wait_seconds,
+        )
+
+    @staticmethod
+    def _guess_mime(path: str) -> str:
+        """Guess MIME type from file extension. Used for upload Content-Type."""
+        ext = os.path.splitext(path)[1].lower()
+        return {
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".svg": "image/svg+xml",
+            ".pdf": "application/pdf",
+            ".txt": "text/plain",
+            ".json": "application/json",
+            ".csv": "text/csv",
+            ".zip": "application/zip",
+            ".tar": "application/x-tar",
+            ".gz": "application/gzip",
+            ".mp3": "audio/mpeg",
+            ".mp4": "video/mp4",
+            ".wav": "audio/wav",
+            ".webm": "video/webm",
+        }.get(ext, "application/octet-stream")
+
+    async def _chat_full(
+        self,
+        speak: bool = False,
+        content: str = "",
+        wait_seconds: int = 0,
+        since: str = "",
+        media_url: str = "",
+        file_info: str = "",
+        msg_type: str = "text",
+    ) -> Dict[str, Any]:
+        """Send a message and/or poll for new messages.
+
+        Extended to support media_url / file_info / msg_type for image and
+        file messages. When media_url is set, content may be empty (used as
+        a caption only).
+
+        Args:
+            speak: if True, send the message
+            content: text content (or caption for media messages)
+            wait_seconds: 0-300, how long to wait for replies
+            since: ISO timestamp; messages newer than this are returned
+            media_url: URL of an uploaded file (from upload_file())
+            file_info: JSON string with file metadata (name, size, mime_type)
+            msg_type: "text" (default), "image", or "file"
+
+        Returns:
+            Server response: messages, members, your_message, latest_timestamp.
+        """
+        agent = await self._ensure_agent()
+        if not agent.private_key:
+            raise AICQError("尚未绑定主人，请先 await client.bind(email, password)")
+
+        # Build payload manually because AICQAgentClient.chat() doesn't expose
+        # media_url/file_info/msg_type. We use the same session + auth headers.
+        import aiohttp
+        core = self._core
+        if core is None or not core.access_token:
+            core = await self._ensure_core()
+
+        timeout_val = max(30, wait_seconds + 30)
+        session = await agent._get_session()
+        url = f"{self.server}/api/v1/ephemeral/agent/chat"
+        payload = {
+            "private_key": agent.private_key,
+            "speak": speak,
+            "content": content,
+            "wait_seconds": wait_seconds,
+            "since": since or agent.latest_timestamp or "",
+            "type": msg_type,
+        }
+        if media_url:
+            payload["media_url"] = media_url
+        if file_info:
+            payload["file_info"] = file_info
+
+        async with session.post(
+            url, json=payload,
+            headers={"Authorization": f"Bearer {core.access_token}"},
+            timeout=aiohttp.ClientTimeout(total=timeout_val),
+        ) as resp:
+            data = await resp.json()
+            if resp.status != 200:
+                raise AICQError(f"Chat 失败: {agent._parse_error(data)}")
+
+        agent.members = data.get("members") or agent.members
+        agent.latest_timestamp = data.get("latest_timestamp") or agent.latest_timestamp
+        return data
 
     async def status(self) -> Dict[str, Any]:
         """Query the server for this agent's current binding."""
@@ -327,6 +516,19 @@ class AICQChatClient:
         since: str = "",
     ) -> Dict[str, Any]:
         return asyncio.run(self.chat(speak, content, wait_seconds, since))
+
+    def upload_file_sync(self, file_path: str) -> Dict[str, Any]:
+        return asyncio.run(self.upload_file(file_path))
+
+    def send_file_sync(
+        self, file_path: str, caption: str = "", wait_seconds: int = 0,
+    ) -> Dict[str, Any]:
+        return asyncio.run(self.send_file(file_path, caption, wait_seconds))
+
+    def send_image_sync(
+        self, file_path: str, caption: str = "", wait_seconds: int = 0,
+    ) -> Dict[str, Any]:
+        return asyncio.run(self.send_image(file_path, caption, wait_seconds))
 
     def status_sync(self) -> Dict[str, Any]:
         return asyncio.run(self.status())
@@ -605,6 +807,82 @@ async def cmd_quickchat_unbind(args):
         await client.close()
 
 
+async def cmd_quickchat_send_file(args):
+    parser = argparse.ArgumentParser(prog="aicq quickchat send-file", add_help=False)
+    parser.add_argument("file", help="本地文件路径")
+    parser.add_argument("--caption", default="", help="文件说明/标题（可选）")
+    parser.add_argument("--server", default="https://aicq.me", help="服务器地址")
+    parser.add_argument("--wait", type=int, default=0, help="发送后等待回复秒数（默认0=不等）")
+    parsed = parser.parse_args(args)
+
+    client = AICQChatClient(server=parsed.server)
+    if not client._binding.get("private_key"):
+        print("✗ 尚未绑定主人", file=sys.stderr)
+        sys.exit(1)
+    try:
+        result = await client.send_file(parsed.file, parsed.caption, parsed.wait)
+        print(f"✓ 已发送文件: {parsed.file}")
+        if result.get("your_message"):
+            media_url = result["your_message"].get("media_url", "")
+            if media_url:
+                print(f"  下载链接: {client.server}{media_url}")
+        if parsed.wait > 0:
+            messages = result.get("messages", [])
+            for m in messages:
+                if m.get("fromId") == client._binding.get("ephemeral_id"):
+                    continue
+                sender = m.get("senderName") or m.get("fromId", "?")
+                content = m.get("content", "")
+                print(f"  [{sender}] {content[:200]}")
+        ts = result.get("latest_timestamp")
+        if ts:
+            client._binding["latest_timestamp"] = ts
+            _save_binding(client._binding)
+    except AICQError as e:
+        print(f"✗ 发送失败: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        await client.close()
+
+
+async def cmd_quickchat_send_image(args):
+    parser = argparse.ArgumentParser(prog="aicq quickchat send-image", add_help=False)
+    parser.add_argument("file", help="本地图片路径 (png/jpg/gif/webp)")
+    parser.add_argument("--caption", default="", help="图片说明/标题（可选）")
+    parser.add_argument("--server", default="https://aicq.me", help="服务器地址")
+    parser.add_argument("--wait", type=int, default=0, help="发送后等待回复秒数（默认0=不等）")
+    parsed = parser.parse_args(args)
+
+    client = AICQChatClient(server=parsed.server)
+    if not client._binding.get("private_key"):
+        print("✗ 尚未绑定主人", file=sys.stderr)
+        sys.exit(1)
+    try:
+        result = await client.send_image(parsed.file, parsed.caption, parsed.wait)
+        print(f"✓ 已发送图片: {parsed.file}")
+        if result.get("your_message"):
+            media_url = result["your_message"].get("media_url", "")
+            if media_url:
+                print(f"  图片链接: {client.server}{media_url}")
+        if parsed.wait > 0:
+            messages = result.get("messages", [])
+            for m in messages:
+                if m.get("fromId") == client._binding.get("ephemeral_id"):
+                    continue
+                sender = m.get("senderName") or m.get("fromId", "?")
+                content = m.get("content", "")
+                print(f"  [{sender}] {content[:200]}")
+        ts = result.get("latest_timestamp")
+        if ts:
+            client._binding["latest_timestamp"] = ts
+            _save_binding(client._binding)
+    except AICQError as e:
+        print(f"✗ 发送失败: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        await client.close()
+
+
 async def cmd_quickchat(args):
     """aicq quickchat <subcommand> [args]"""
     if not args:
@@ -614,7 +892,9 @@ async def cmd_quickchat(args):
   aicq quickchat init --name NAME              注册+登录智能体
   aicq quickchat bind --email E --password P   绑定主人账号
   aicq quickchat chat                          交互式聊天
-  aicq quickchat send "msg"                    一次性发送
+  aicq quickchat send "msg"                    一次性发送文本
+  aicq quickchat send-image ./pic.png          发送图片
+  aicq quickchat send-file ./doc.pdf           发送文件
   aicq quickchat poll [--wait N]               一次性拉取
   aicq quickchat status                        查看绑定状态
   aicq quickchat unbind                        解除绑定
@@ -632,6 +912,10 @@ async def cmd_quickchat(args):
         await cmd_quickchat_chat(rest)
     elif sub == "send":
         await cmd_quickchat_send(rest)
+    elif sub == "send-image":
+        await cmd_quickchat_send_image(rest)
+    elif sub == "send-file":
+        await cmd_quickchat_send_file(rest)
     elif sub == "poll":
         await cmd_quickchat_poll(rest)
     elif sub == "status":
