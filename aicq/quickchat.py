@@ -314,7 +314,7 @@ class AICQChatClient:
             "size": upload.get("file_size", 0),
             "mime_type": upload.get("mime_type", ""),
         })
-        return await self.chat(
+        return await self._chat_full(
             speak=True,
             content=caption,
             media_url=upload["url"],
@@ -353,7 +353,7 @@ class AICQChatClient:
             "width": 0,
             "height": 0,
         })
-        return await self.chat(
+        return await self._chat_full(
             speak=True,
             content=caption,
             media_url=upload["url"],
