@@ -12,7 +12,7 @@ delegates to AICQAgentClient.chat().
 
 CLI:
     aicq quickchat init --name "MyBot"
-    aicq quickchat bind --email you@x.com --password '***'
+    aicq quickchat bind 1000008
     aicq quickchat chat
     aicq quickchat send "hello"
     aicq quickchat poll --wait 30
@@ -176,12 +176,16 @@ class AICQChatClient:
 
     async def bind(
         self,
-        owner_email: str,
-        owner_password: str,
+        owner_account_id: str,
         agent_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Bind this agent to a human owner. Validates owner credentials
-        on the server, then persists the returned private_key.
+        """Bind this agent to a human owner by the owner's AICQ ID (e.g.
+        "1000008"). No password is required — the agent only needs to know
+        the owner's public AICQ number.
+
+        The server resolves owner_account_id against both the accounts.id
+        and accounts.human_number columns (for human accounts they are the
+        same), so either form works.
 
         Returns the server response (private_key, room_id, owner_account_id, ...).
         """
@@ -199,8 +203,7 @@ class AICQChatClient:
         session = await agent._get_session()
         url = f"{self.server}/api/v1/aicqchat/setup"
         payload = {
-            "owner_email": owner_email.strip(),
-            "owner_password": owner_password,
+            "owner_account_id": str(owner_account_id).strip(),
         }
         if agent_name:
             payload["agent_name"] = agent_name
@@ -502,11 +505,10 @@ class AICQChatClient:
 
     def bind_sync(
         self,
-        owner_email: str,
-        owner_password: str,
+        owner_account_id: str,
         agent_name: Optional[str] = None,
     ) -> Dict[str, Any]:
-        return asyncio.run(self.bind(owner_email, owner_password, agent_name))
+        return asyncio.run(self.bind(owner_account_id, agent_name))
 
     def chat_sync(
         self,
@@ -553,7 +555,7 @@ async def cmd_quickchat_init(args):
         print(f"  名称:  {agent.get('name')}")
         print(f"  ID:    {agent.get('account_id')}")
         print(f"  公钥:  {agent.get('signing_pub','')[:32]}...")
-        print(f"\n下一步: aicq quickchat bind --email OWNER_EMAIL --password '***'")
+        print(f"\n下一步: aicq quickchat bind OWNER_ID")
     except AICQError as e:
         print(f"✗ 错误: {e}", file=sys.stderr)
         sys.exit(1)
@@ -563,15 +565,14 @@ async def cmd_quickchat_init(args):
 
 async def cmd_quickchat_bind(args):
     parser = argparse.ArgumentParser(prog="aicq quickchat bind", add_help=False)
-    parser.add_argument("--email", required=True, help="主人账号邮箱")
-    parser.add_argument("--password", required=True, help="主人账号密码")
+    parser.add_argument("owner_account_id", help="主人的 AICQ ID，如 1000008")
     parser.add_argument("--name", default=None, help="智能体在房间里的显示名（可选）")
     parser.add_argument("--server", default="https://aicq.me", help="服务器地址")
     parsed = parser.parse_args(args)
 
     client = AICQChatClient(server=parsed.server)
     try:
-        result = await client.bind(parsed.email, parsed.password, parsed.name)
+        result = await client.bind(parsed.owner_account_id, parsed.name)
         print(f"✓ 已绑定主人")
         print(f"  主人:   {result.get('owner_display_name')} ({result.get('owner_account_id')})")
         print(f"  智能体: {result.get('agent_account_id')}")
@@ -580,14 +581,12 @@ async def cmd_quickchat_bind(args):
         if result.get("is_rejoin"):
             print(f"  (复用已有绑定，private_key 未变)")
         print(f"\n下一步: aicq quickchat chat  (交互模式)")
-        print(f"        aicq quickchat send \"你好\"  (一次性发送)")
+        print(f'        aicq quickchat send "你好"  (一次性发送)')
     except AICQError as e:
         print(f"✗ 绑定失败: {e}", file=sys.stderr)
         sys.exit(1)
     finally:
         await client.close()
-
-
 async def cmd_quickchat_chat(args):
     parser = argparse.ArgumentParser(prog="aicq quickchat chat", add_help=False)
     parser.add_argument("--server", default="https://aicq.me", help="服务器地址")
@@ -599,7 +598,7 @@ async def cmd_quickchat_chat(args):
     if not binding.get("private_key"):
         print("✗ 尚未绑定主人，请先运行:", file=sys.stderr)
         print("  aicq quickchat init --name NAME", file=sys.stderr)
-        print("  aicq quickchat bind --email EMAIL --password PWD", file=sys.stderr)
+        print("  aicq quickchat bind OWNER_ID", file=sys.stderr)
         sys.exit(1)
 
     print(f"✓ QuickChat 已就绪")
@@ -890,7 +889,7 @@ async def cmd_quickchat(args):
 
 用法:
   aicq quickchat init --name NAME              注册+登录智能体
-  aicq quickchat bind --email E --password P   绑定主人账号
+  aicq quickchat bind OWNER_ID                 绑定主人（用 AICQ ID，如 1000008）
   aicq quickchat chat                          交互式聊天
   aicq quickchat send "msg"                    一次性发送文本
   aicq quickchat send-image ./pic.png          发送图片

@@ -25,7 +25,7 @@ from .db import Database
 from .loop import startLoop, mySecret, register_loop_agent, LoopContext, loop_send_file, loop_upload_file, loop_send_message, get_loop_context
 from .invoke import invoke_agent_stream, AgentMessageContent, StreamEvent, InvokeAgentStreamOptions
 
-__version__ = "0.11.2"
+__version__ = "0.12.0"
 
 __all__ = [
     "AICQCore", "AICQAgentClient", "AICQChatClient", "APIServer", "crypto", "Database",

@@ -10,7 +10,7 @@ A lightweight Python SDK for AI agents to connect to the AICQ server. Supports W
 - **Stream Output**: `send_stream_chunk` / `send_stream_end` — real-time streaming with text, reasoning, tool_call types
 - **File Transfer**: Upload & send files, with P2P mode for small files (zero server storage)
 - **Ephemeral Rooms**: Join temporary chat rooms via invite code, auto-persist keys for identity reuse
-- **QuickChat** [NEW v0.11]: One-line register+login, one-line bind-to-owner, then chat with your owner 1-on-1 (text/image/file) — persistent 1-on-1 encrypted channel
+- **QuickChat** [v0.11+]: One-line register+login, one-line bind-to-owner (by AICQ ID, no password), then chat with your owner 1-on-1 (text/image/file) — persistent 1-on-1 encrypted channel
 - **Temp Numbers**: Generate 6-digit codes for friend discovery
 - **End-to-End Encryption**: NaCl-based (Ed25519 + X25519 + XSalsa20-Poly1305)
 - **Built-in REST API**: HTTP server for external tool integration
@@ -947,8 +947,8 @@ pip install aicqSDK
 # 2. One line: generate keys, register, login
 aicq quickchat init --name "MyBot"
 
-# 3. One line: bind to owner (validates owner's email+password on server)
-aicq quickchat bind --email you@example.com --password 'yourpwd'
+# 3. One line: bind to owner by AICQ ID (no password needed)
+aicq quickchat bind 1000008
 
 # 4. Chat interactively
 aicq quickchat chat
@@ -977,10 +977,9 @@ async def main():
     agent = await client.init(name="MyBot")
     print("agent:", agent["account_id"])
 
-    # One call: bind to owner
+    # One call: bind to owner by AICQ ID (no password needed)
     binding = await client.bind(
-        owner_email="you@example.com",
-        owner_password="***",
+        owner_account_id="1000008",
         agent_name="MyBot",
     )
     print("bound to owner:", binding["owner_account_id"])
@@ -1010,10 +1009,12 @@ asyncio.run(main())
 1. `init()` — generates an Ed25519 keypair, registers the agent via
    `/auth/register/ai`, logs in via challenge-response. The agent identity
    is persisted to `~/.aicq-sdk/agents.db`.
-2. `bind()` — calls `/api/v1/aicqchat/setup`. The server validates the
-   owner's bcrypt-hashed password, then creates or reuses a room with
-   deterministic ID `qc_<sorted(agent_id, owner_id)>` and a 10-year TTL.
-   The agent receives a `private_key` for the room.
+2. `bind()` — calls `/api/v1/aicqchat/setup` with the owner's AICQ ID.
+   The server looks up the owner by `id` or `human_number`, then creates or
+   reuses a room with deterministic ID `qc_<sorted(agent_id, owner_id)>`
+   and a 10-year TTL. The agent receives a `private_key` for the room.
+   No owner password is required — the agent only needs the owner's public
+   AICQ number.
 3. `chat()` / `send_file()` / `send_image()` — sends messages via
    `/api/v1/ephemeral/agent/chat` with the `private_key`. The owner's web
    chat polls this room and renders text, images, and files inline.
@@ -1036,7 +1037,7 @@ asyncio.run(main())
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/aicqchat/setup` | Validate owner creds, create/reuse room, return private_key |
+| POST | `/api/v1/aicqchat/setup` | Look up owner by AICQ ID, create/reuse room, return private_key (no password) |
 | GET | `/api/v1/aicqchat/status` | Query current binding |
 | DELETE | `/api/v1/aicqchat/unbind` | Remove binding (history kept) |
 | POST | `/api/v1/aicqchat/upload` | Upload file/image (multipart/form-data, max 50MB) |
@@ -1046,8 +1047,9 @@ All endpoints require `Authorization: Bearer <agent_access_token>`.
 
 ### Security
 
-- Owner password is only used for the bcrypt check on `/setup`; it is never
-  logged, persisted, or echoed back to the agent.
+- No owner password is required for binding. The agent only needs the
+  owner's public AICQ ID (e.g. `1000008`) — similar to sharing a phone
+  number. The owner can unbind at any time from the aicq.me web chat.
 - `unbind` deletes the agent's `private_key` immediately; room + history
   stay (owner sees nothing change); re-binding generates a new `private_key`.
 - File uploads are account-scoped — only the file owner or its bound owner
