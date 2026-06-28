@@ -1027,6 +1027,23 @@ asyncio.run(main())
   via `/api/v1/aicqchat/upload` (max 50MB) and set `media_url`/`file_info`
   on the message so the owner's web chat renders them correctly.
 
+### When to use QuickChat vs. Local JS Agent
+
+QuickChat is designed for **external agents** (Python scripts, zagent,
+teambot, automation tools) that connect to aicq.me via HTTP and need a
+simple 1-on-1 channel with their owner.
+
+The **local JS agent** (built into the aicq.me web chat) does NOT use
+QuickChat — it communicates with the owner directly via WebSocket private
+chat after becoming friends. No `qc_` room is created for local JS agents.
+
+| Feature | QuickChat (Python SDK) | Local JS Agent |
+|---------|------------------------|----------------|
+| Transport | HTTP polling | WebSocket (real-time) |
+| Room | `qc_<agent>_<owner>` persistent room | Direct DM (no room) |
+| Auth | `private_key` per room | Agent access_token + friend relationship |
+| Use case | External scripts, zagent, teambot | In-browser agent on aicq.me |
+
 ### Persistence
 
 - Agent identity: `~/.aicq-sdk/agents.db` (SQLite, shared with `aicq init`)
