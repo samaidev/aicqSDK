@@ -887,7 +887,7 @@ aicqSDK/
 
 > 本节为 **append-only** 索引，新增指南请追加到末尾，不要修改已有行（避免多分支冲突）。
 
-- [INVOKE_AGENT_STREAM.md](./INVOKE_AGENT_STREAM.md) — 一键调用智能体并接收流式输出 (Go / Node.js / Python 三端)
+- [INVOKE_AGENT_STREAM.md](./INVOKE_AGENT_STREAM.md) — 一键调用智能体并接收流式输出 (Go / Node.js / Python 三端，v0.13 支持多会话)
 - [Chat Session UI](#chat-session-ui客户端会话边界) — 客户端会话边界（New Chat / History）说明
 
 ## Chat Session UI（客户端会话边界）

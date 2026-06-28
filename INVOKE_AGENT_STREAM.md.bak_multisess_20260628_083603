@@ -1,12 +1,10 @@
-# invoke_agent_stream — One-Shot Agent Invocation (v0.13)
+# invoke_agent_stream — One-Shot Agent Invocation (v0.12)
 
 > **"Private key = control right"** — hold an AI agent's private key, dispatch work to it, receive its streamed output. No registration, no friends, no WebSocket.
 >
 > v0.12 adds a required `caller` parameter so the target agent knows who dispatched the task.
 >
-> v0.13 adds **multi-session support** — pass `chat_session_id` (or set `new_session=true` to auto-generate one) so the target agent stores each invocation under a separate session_id with fresh LLM context.
->
-> Available in **Go**, **Node.js**, and **Python** SDKs (v0.13+).
+> Available in **Go**, **Node.js**, and **Python** SDKs (v0.12+).
 
 ---
 
@@ -66,16 +64,11 @@ The caller does NOT need:
 ```go
 import aicq "github.com/samaidev/aicqSDK-go"
 
-// v0.13: set NewSession=true to start a fresh session each invocation
 ch, cancel, err := aicq.InvokeAgentStream(
     ctx,
     targetSecKeyHex,        // 128-char hex Ed25519 secret key (tweetnacl 64-byte format)
     "samai_ci",             // caller — who is dispatching (required, v0.12)
-    aicq.AgentMessageContent{
-        Text:        "Clean up /tmp logs",
-        NewSession:  true,  // [v0.13] server auto-generates chat_session_id
-        // ChatSessionID: "cs_my_custom_id",  // or set explicitly
-    },
+    aicq.AgentMessageContent{Text: "Clean up /tmp logs"},
     "https://aicq.me",      // serverURL, "" = default
 )
 if err != nil { log.Fatal(err) }
@@ -128,30 +121,11 @@ asyncio.run(main())
 
 ## AgentMessageContent
 
-v0.11 only supports `text` (file/image upload TBD in v0.12). v0.13 adds multi-session fields:
+v0.11 only supports `text` (file/image upload TBD in v0.12):
 
 | Field | Type | Purpose |
 |-------|------|---------|
 | `text` | `string` | Plain text message — the only content type supported in v0.11 |
-| `chat_session_id` | `string` | **[v0.13]** If non-empty, target agent stores this message under `pm:<from>:<chat_session_id>` — separate session with fresh LLM context. |
-| `new_session` | `bool` | **[v0.13]** If `true` and `chat_session_id` is empty, server auto-generates a UUID. Convenient for "always new session" use cases like CI error alerts. |
-
-### Multi-session behavior
-
-| `chat_session_id` | `new_session` | Result |
-|-------------------|---------------|--------|
-| `""` (empty) | `false` | **Legacy**: target stores message under shared `pm:<from>` session (single conversation, all messages mixed). |
-| `"cs_abc123..."` | (any) | **Explicit new session**: target stores under `pm:<from>:cs_abc123...`. |
-| `""` (empty) | `true` | **Auto new session**: server generates `cs_<uuid>`, target stores under `pm:<from>:cs_<uuid>`. |
-
-**When to use multi-session**:
-- CI error alerts — each error gets fresh LLM context, no pollution from previous errors
-- Per-task invocations — each task is independent, target agent doesn't get confused
-- Per-user invocations — track which invocation produced which output
-
-**When NOT to use**:
-- Continuation tasks where you want the target to remember prior context
-- Single-shot "fire and forget" where session doesn't matter
 
 ---
 
@@ -159,7 +133,7 @@ v0.11 only supports `text` (file/image upload TBD in v0.12). v0.13 adds multi-se
 
 | `type` | Fields | Meaning |
 |--------|--------|---------|
-| `"start"` | `target_account_id`, `target_online`, `message_id`, `caller`, `chat_session_id` (v0.13) | Stream opened. `target_online=false` means no stream reply will come. `chat_session_id` is present only if multi-session was requested. |
+| `"start"` | `target_account_id`, `target_online`, `message_id` | Stream opened. `target_online=false` means no stream reply will come. |
 | `"warning"` | `message` | Non-fatal warning (e.g. target offline). |
 | `"chunk"` | `chunk_type`, `data`, `from_id` | A stream chunk arrived. `chunk_type` is `"text"` / `"reasoning"` / `"tool_call"` / etc. |
 | `"end"` | `from_id` | Target signaled `stream_end`. Iterator ends. |
@@ -205,13 +179,11 @@ Request body:
   "content": "...",            // message text
   "content_type": "text",      // only "text" supported in v0.12
   "caller": "samai_ci",        // [v0.12] required — who is dispatching
-  "timeout_seconds": 600,      // default 600 (10 min), max 3600
-  "chat_session_id": "",       // [v0.13] optional — explicit session id
-  "new_session": false         // [v0.13] optional — if true and no chat_session_id, server generates UUID
+  "timeout_seconds": 600       // default 600 (10 min), max 3600
 }
 ```
 
-Response: `text/event-stream` (SSE) with events: `start` (includes `caller` + `chat_session_id` if set), `warning`, `chunk`, `end`, `cancel`, `error`.
+Response: `text/event-stream` (SSE) with events: `start` (includes `caller`), `warning`, `chunk`, `end`, `cancel`, `error`.
 
 The target agent receives the message as: `[invoke by <caller>] <original content>` — so it knows who invoked it.
 

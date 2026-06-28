@@ -65,6 +65,13 @@ type AgentMessageContent struct {
         FileMime string
         Image    []byte
         ImageMime string
+        // [v0.13] Multi-session support:
+        // ChatSessionID — if non-empty, relayed to target agent so it stores
+        //   the message under a separate session_id (pm:<from>:<chat_session_id>).
+        // NewSession — if true and ChatSessionID is empty, server auto-generates
+        //   a UUID chat_session_id.
+        ChatSessionID string
+        NewSession    bool
 }
 
 // StreamEvent represents one event from the target agent's output stream.
@@ -114,6 +121,13 @@ type StreamEvent struct {
 //   - the target agent's private key (proves control right)
 //   - the target to be online (running startLoop) to get a stream reply
 //     (if target is offline, message is saved but no stream comes back)
+//
+// [v0.13] Multi-session support:
+//   - Set content.ChatSessionID to a unique value to make the target agent
+//     store this message under a separate session_id (pm:<from>:<chat_session_id>).
+//     Each invocation with a fresh chat_session_id starts a fresh LLM context.
+//   - Set content.NewSession=true to have the server auto-generate a UUID.
+//   - If both are empty/false, behavior is unchanged (shared session, legacy).
 //
 // Example:
 //
@@ -178,6 +192,7 @@ func InvokeAgentStream(
         sigHex := hex.EncodeToString(signature)
 
         // 4. Build the invoke-stream request body.
+        // [v0.13] Include chat_session_id + new_session for multi-session support.
         reqBody := map[string]interface{}{
                 "target_public_key": pubKeyHex,
                 "challenge":         challenge,
@@ -186,6 +201,14 @@ func InvokeAgentStream(
                 "content_type":      "text",
                 "caller":            caller,
                 "timeout_seconds":   600, // 10 min default; ctx can cancel earlier
+        }
+        // [v0.13] Multi-session: pass chat_session_id so target agent stores
+        // the message under a separate session_id (fresh LLM context per invoke).
+        if content.ChatSessionID != "" {
+                reqBody["chat_session_id"] = content.ChatSessionID
+        }
+        if content.NewSession {
+                reqBody["new_session"] = true
         }
         jsonBody, _ := json.Marshal(reqBody)
 
