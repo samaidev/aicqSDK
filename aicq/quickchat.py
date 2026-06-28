@@ -121,16 +121,12 @@ class AICQChatClient:
         return core
 
     async def _ensure_agent(self) -> AICQAgentClient:
-        """Return an AICQAgentClient wired up with token + private_key.
+        """Return an AICQAgentClient wired up with token.
 
-        - access_token: from the bound AICQCore (just logged in)
-        - private_key: from the persisted binding (set by bind())
+        No private_key needed — QuickChat now uses DM via /aicqchat/chat
+        with the agent's access_token for auth.
         """
-        if self._agent is not None and self._agent.private_key:
-            # Make sure the token is still fresh
-            if not self._agent.access_token:
-                core = await self._ensure_core()
-                self._agent.access_token = core.access_token
+        if self._agent is not None and self._agent.access_token:
             return self._agent
 
         core = await self._ensure_core()
@@ -139,14 +135,6 @@ class AICQChatClient:
             access_token=core.access_token,
             auto_login=False,
         )
-        # Restore private_key from disk if we have a binding
-        pk = self._binding.get("private_key", "")
-        if pk:
-            agent.private_key = pk
-            agent.room_id = self._binding.get("room_id", "")
-            agent.room_name = self._binding.get("room_name", "")
-            agent.expires_at = self._binding.get("expires_at", "")
-            agent.invite_code = self._binding.get("room_id", "")  # for caching
         self._agent = agent
         return agent
 
@@ -218,20 +206,15 @@ class AICQChatClient:
             if resp.status != 200:
                 raise AICQError(f"绑定失败: {agent._parse_error(data)}")
 
-        # Persist the binding
+        # Persist the binding (no private_key needed — DM-based)
         binding = {
-            "private_key": data["private_key"],
-            "room_id": data.get("room_id", ""),
-            "room_name": data.get("room_name", ""),
             "agent_account_id": data.get("agent_account_id", ""),
             "owner_account_id": data.get("owner_account_id", ""),
             "owner_display_name": data.get("owner_display_name", ""),
-            "expires_at": data.get("expires_at", ""),
-            "ephemeral_id": data.get("ephemeral_id", ""),
         }
         _save_binding(binding)
         self._binding = binding
-        # Reset cached agent so next chat() picks up the new private_key
+        # Reset cached agent so next chat() picks up the new binding
         self._agent = None
         await agent.close()
         return data
@@ -401,9 +384,8 @@ class AICQChatClient:
     ) -> Dict[str, Any]:
         """Send a message and/or poll for new messages.
 
-        Extended to support media_url / file_info / msg_type for image and
-        file messages. When media_url is set, content may be empty (used as
-        a caption only).
+        Uses /api/v1/aicqchat/chat (DM-based, no ephemeral room).
+        The agent's access_token is used for auth — no private_key needed.
 
         Args:
             speak: if True, send the message
@@ -415,24 +397,20 @@ class AICQChatClient:
             msg_type: "text" (default), "image", or "file"
 
         Returns:
-            Server response: messages, members, your_message, latest_timestamp.
+            Server response: messages, your_message, latest_timestamp.
         """
         agent = await self._ensure_agent()
-        if not agent.private_key:
-            raise AICQError("尚未绑定主人，请先 await client.bind(email, password)")
-
-        # Build payload manually because AICQAgentClient.chat() doesn't expose
-        # media_url/file_info/msg_type. We use the same session + auth headers.
-        import aiohttp
         core = self._core
         if core is None or not core.access_token:
             core = await self._ensure_core()
 
+        import aiohttp
         timeout_val = max(30, wait_seconds + 30)
         session = await agent._get_session()
-        url = f"{self.server}/api/v1/ephemeral/agent/chat"
+        # NEW: Use /aicqchat/chat instead of /ephemeral/agent/chat
+        # No private_key needed — agent access_token is used for auth
+        url = f"{self.server}/api/v1/aicqchat/chat"
         payload = {
-            "private_key": agent.private_key,
             "speak": speak,
             "content": content,
             "wait_seconds": wait_seconds,
@@ -453,7 +431,6 @@ class AICQChatClient:
             if resp.status != 200:
                 raise AICQError(f"Chat 失败: {agent._parse_error(data)}")
 
-        agent.members = data.get("members") or agent.members
         agent.latest_timestamp = data.get("latest_timestamp") or agent.latest_timestamp
         return data
 
