@@ -206,10 +206,19 @@ class AICQChatClient:
             if resp.status != 200:
                 raise AICQError(f"绑定失败: {agent._parse_error(data)}")
 
+        # 【修复】发送好友请求（必须先通过好友才能发消息）
+        owner_id = data.get("owner_account_id", "")
+        if owner_id:
+            try:
+                await core.add_friend(owner_id, message=f"Hi! I'm {agent_name or 'an AI agent'}. Please accept my friend request so we can chat.")
+                logger.info("已向主人 %s 发送好友请求", owner_id)
+            except AICQError as e:
+                logger.warning("发送好友请求失败（可能已经是好友）: %s", e)
+
         # Persist the binding (no private_key needed — DM-based)
         binding = {
             "agent_account_id": data.get("agent_account_id", ""),
-            "owner_account_id": data.get("owner_account_id", ""),
+            "owner_account_id": owner_id,
             "owner_display_name": data.get("owner_display_name", ""),
         }
         _save_binding(binding)
@@ -403,6 +412,23 @@ class AICQChatClient:
         core = self._core
         if core is None or not core.access_token:
             core = await self._ensure_core()
+
+        # 【修复】发消息前检查好友关系，未通过好友则拒绝发送
+        if speak and self._binding:
+            owner_id = self._binding.get("owner_account_id")
+            if owner_id:
+                try:
+                    friends = await core.list_friends()
+                    friend_ids = {f.get("friend_id") or f.get("id") for f in friends}
+                    if owner_id not in friend_ids:
+                        raise AICQError(
+                            f"尚未与主人 {owner_id} 建立好友关系。"
+                            "请等待主人接受好友请求后再发消息。"
+                        )
+                except AICQError:
+                    raise
+                except Exception as e:
+                    logger.warning("好友关系检查失败（放行）: %s", e)
 
         import aiohttp
         timeout_val = max(30, wait_seconds + 30)

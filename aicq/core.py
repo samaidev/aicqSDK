@@ -329,17 +329,33 @@ class AICQCore:
         Returns:
             智能体信息字典，包含 id, name, public_key 等
         """
+        import uuid as _uuid
+
         # 1. 生成密钥对
         signing_pub, signing_sec = crypto.generate_signing_keypair()
         exchange_pub, exchange_sec = crypto.generate_exchange_keypair()
 
-        # 2. 注册到服务器
+        # 2. 【修复】立即保存到本地数据库（使用临时 ID），确保密钥不丢失
+        #    即使注册超时或失败，密钥也已安全持久化，下次可恢复
+        temp_id = f"_pending_{_uuid.uuid4().hex[:8]}"
+        agent_id = self.db.save_agent(
+            account_id=temp_id,
+            name=name,
+            agent_type="my",
+            signing_pub=signing_pub,
+            signing_sec=signing_sec,
+            exchange_pub=exchange_pub,
+            exchange_sec=exchange_sec,
+        )
+        logger.info("密钥已本地持久化 (temp_id=%s)", temp_id)
+
+        # 3. 注册到服务器
+        account_id = ""
         try:
             result = await self._http_post("/api/v1/auth/register/ai", {
                 "public_key": signing_pub,
                 "agent_name": name,
             })
-            # Server returns: {"access_token": ..., "account": {"id": "ai_xxx", ...}, "refresh_token": ...}
             acct = result.get("account") or {}
             account_id = (
                 acct.get("id")
@@ -349,27 +365,33 @@ class AICQCore:
             )
         except AICQError as e:
             logger.warning("注册失败，可能已存在: %s", e)
-            # 如果注册失败，尝试通过 lookup 获取 account_id
-            lookup = await self._http_get(f"/api/v1/accounts/lookup?public_key={signing_pub}")
-            acct = lookup.get("account") or {}
-            account_id = (
-                acct.get("id")
-                or lookup.get("account_id")
-                or lookup.get("accountId", "")
+            try:
+                lookup = await self._http_get(f"/api/v1/accounts/lookup?public_key={signing_pub}")
+                acct = lookup.get("account") or {}
+                account_id = (
+                    acct.get("id")
+                    or lookup.get("account_id")
+                    or lookup.get("accountId", "")
+                )
+            except AICQError as e2:
+                logger.warning("lookup 也失败: %s", e2)
+
+        # 4. 更新本地数据库中的 account_id（如果注册成功）
+        if account_id:
+            agent_id = self.db.save_agent(
+                account_id=account_id,
+                name=name,
+                agent_type="my",
+                signing_pub=signing_pub,
+                signing_sec=signing_sec,
+                exchange_pub=exchange_pub,
+                exchange_sec=exchange_sec,
             )
+            logger.info("已更新本地 agent account_id: %s", account_id)
+        else:
+            logger.warning("未能获取服务器 account_id，本地保留 temp_id")
 
-        # 3. 保存到本地数据库
-        agent_id = self.db.save_agent(
-            account_id=account_id,
-            name=name,
-            agent_type="my",
-            signing_pub=signing_pub,
-            signing_sec=signing_sec,
-            exchange_pub=exchange_pub,
-            exchange_sec=exchange_sec,
-        )
-
-        # 4. 自动登录
+        # 5. 自动登录
         self._agent = self.db.get_agent(agent_id)
         try:
             await self.login()
